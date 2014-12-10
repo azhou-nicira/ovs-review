@@ -591,6 +591,7 @@ odp_execute_actions(void *dp, struct dpif_packet **packets, int cnt, bool steal,
             break;
 
         case OVS_ACTION_ATTR_UNSPEC:
+        case OVS_ACTION_ATTR_BPF_PROG:
         case __OVS_ACTION_ATTR_MAX:
             OVS_NOT_REACHED();
         }

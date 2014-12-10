@@ -88,6 +88,7 @@ odp_action_len(uint16_t type)
     case OVS_ACTION_ATTR_SET: return -2;
     case OVS_ACTION_ATTR_SET_MASKED: return -2;
     case OVS_ACTION_ATTR_SAMPLE: return -2;
+    case OVS_ACTION_ATTR_BPF_PROG: return sizeof(struct ovs_action_bpf_prog);
 
     case OVS_ACTION_ATTR_UNSPEC:
     case __OVS_ACTION_ATTR_MAX:
@@ -183,6 +184,17 @@ format_odp_sample_action(struct ds *ds, const struct nlattr *attr)
     len = nl_attr_get_size(a[OVS_SAMPLE_ATTR_ACTIONS]);
     format_odp_actions(ds, nla_acts, len);
     ds_put_format(ds, "))");
+}
+
+static void
+format_bpf_prog_action(struct ds *ds, const struct nlattr *a)
+{
+    struct ovs_action_bpf_prog *bpf_act = (struct ovs_action_bpf_prog *)
+                                          nl_attr_get(a);
+
+    ds_put_cstr(ds, "bpf");
+    ds_put_format(ds, "(%u,%u,%u)", ntohl(bpf_act->prog_fd),
+                  ntohl(bpf_act->arg0), ntohl(bpf_act->arg1));
 }
 
 static const char *
@@ -682,6 +694,9 @@ format_odp_action(struct ds *ds, const struct nlattr *a)
     case OVS_ACTION_ATTR_SAMPLE:
         format_odp_sample_action(ds, a);
         break;
+    case OVS_ACTION_ATTR_BPF_PROG:
+        format_bpf_prog_action(ds, a);
+        break;
     case OVS_ACTION_ATTR_UNSPEC:
     case __OVS_ACTION_ATTR_MAX:
     default:
@@ -1004,6 +1019,24 @@ parse_odp_action(const char *s, const struct simap *port_names,
 
     if (!strncmp(s, "userspace(", 10)) {
         return parse_odp_userspace_action(s, actions);
+    }
+
+    {
+        struct ovs_action_bpf_prog act_bpf;
+        uint32_t fd;
+        uint32_t arg0, arg1;
+        int n = -1;
+
+        if (ovs_scan(s, "bpf(%"PRIu32",%"PRIu32",%"PRIu32")%n", &fd, &arg0,
+                     &arg1, &n)) {
+            memset(&act_bpf, 0, sizeof(act_bpf));
+            act_bpf.prog_fd = htonl(fd);
+            act_bpf.arg0 = htonl(arg0);
+            act_bpf.arg1 = htonl(arg1);
+            nl_msg_put_unspec(actions, OVS_ACTION_ATTR_BPF_PROG,
+                              &act_bpf, sizeof(act_bpf));
+            return n;
+        }
     }
 
     if (!strncmp(s, "set(", 4)) {

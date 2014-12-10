@@ -569,6 +569,18 @@ struct ovs_action_push_mpls {
 };
 
 /**
+ * struct ovs_action_bpf_prog - %OVS_ACTION_ATTR_BPF_PROG action argument.
+ *
+ *  XXX provides bpf program id and execution context.
+ *
+ */
+struct ovs_action_bpf_prog {
+	__be32 prog_fd;
+	__be32 arg0;
+	__be32 arg1;
+};
+
+/**
  * struct ovs_action_push_vlan - %OVS_ACTION_ATTR_PUSH_VLAN action argument.
  * @vlan_tpid: Tag protocol identifier (TPID) to push.
  * @vlan_tci: Tag control identifier (TCI) to push.  The CFI bit must be set
@@ -685,7 +697,7 @@ enum ovs_action_attr {
 				       * data immediately followed by a mask.
 				       * The data must be zero for the unmasked
 				       * bits. */
-
+	OVS_ACTION_ATTR_BPF_PROG,     /* struct ovs_action_bpf_prog. */
 #ifndef __KERNEL__
 	OVS_ACTION_ATTR_TUNNEL_PUSH,   /* struct ovs_action_push_tnl*/
 	OVS_ACTION_ATTR_TUNNEL_POP,    /* u32 port number. */
@@ -694,5 +706,20 @@ enum ovs_action_attr {
 };
 
 #define OVS_ACTION_ATTR_MAX (__OVS_ACTION_ATTR_MAX - 1)
+
+/* integer value in 'imm' field of BPF_CALL instruction selects which OVS helper
+ * function eBPF program intends to call
+ */
+enum ovs_bpf_func_id {
+	OVS_BPF_FUNC_unspec,
+	OVS_BPF_FUNC_output,          /* int ovs_bpf_output(ctxt) */
+	__OVS_BPF_FUNC_MAX_ID,
+};
+
+struct ovs_bpf_action_ctxt {
+	void *skb;
+	uint32_t arg0;
+	uint32_t arg1;
+};
 
 #endif /* _LINUX_OPENVSWITCH_H */
