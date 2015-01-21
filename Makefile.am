@@ -354,6 +354,7 @@ dist-docs:
 
 include m4/automake.mk
 include lib/automake.mk
+include bpf/automake.mk
 include ofproto/automake.mk
 include utilities/automake.mk
 include tests/automake.mk
