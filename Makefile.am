@@ -71,6 +71,7 @@ docs = \
 	DESIGN.md \
 	FAQ.md \
 	INSTALL.md \
+	INSTALL.BPF.md \
 	INSTALL.Debian.md \
 	INSTALL.Docker.md \
 	INSTALL.DPDK.md \

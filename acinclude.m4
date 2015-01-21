@@ -157,6 +157,22 @@ AC_DEFUN([OVS_CHECK_LINUX], [
   AM_CONDITIONAL(LINUX_ENABLED, test -n "$KBUILD")
 ])
 
+dnl OVS_CHECK_BPF
+dnl
+dnl Check clang set ups for compiling BPF
+AC_DEFUN([OVS_CHECK_LLC], [
+  AC_ARG_WITH([llc],
+              [AC_HELP_STRING([--with-llc=/path/to/llc],
+                              [Specify the bpf clang backend binrary])])
+
+  if (test X"$with_llc" != X); then
+    LLC=$with_llc
+      if (test ! -x $LLC); then
+         AC_MSG_ERROR([BPF llc backend is configured but not found ])
+      fi
+  fi
+])
+
 dnl OVS_CHECK_DPDK
 dnl
 dnl Configure DPDK source tree
