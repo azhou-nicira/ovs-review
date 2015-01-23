@@ -317,6 +317,28 @@ lib_libsflow_la_CFLAGS += -Wno-unused-parameter
 endif
 
 if LINUX
+lib_LTLIBRARIES += lib/libbpf.la
+lib_libbpf_la_LDFLAGS = \
+        -version-info $(LT_CURRENT):$(LT_REVISION):$(LT_AGE) \
+	-Wl,--version-script=$(top_builddir)/lib/libbpf.sym \
+        $(AM_LDFLAGS)
+lib_libbpf_la_SOURCES = \
+	lib/libbpf.h \
+	lib/libbpf.c
+lib_libbpf_la_CPPFLAGS = $(AM_CPPFLAGS)
+# GCC Bug 60784 affects both GCC 4.8 and GCC 4.9. -Wmissing-field-initializers will
+# give spurious warning when compiling libbpf. Turn it off for now.
+lib_libbpf_la_CFLAGS = $(filter-out -Wmissing-field-initializers, $(AM_CFLAGS))
+lib_libbpf_la_CFLAGS += -Wno-missing-field-initializers
+if HAVE_WNO_UNUSED
+lib_libbpf_la_CFLAGS += -Wno-unused
+endif
+if HAVE_WNO_UNUSED_PARAMETER
+lib_libbpf_la_CFLAGS += -Wno-unused-parameter
+endif
+endif
+
+if LINUX
 lib_libopenvswitch_la_SOURCES += \
 	lib/dpif-netlink.c \
 	lib/dpif-netlink.h \
