@@ -19,6 +19,11 @@ vswitchd_ovs_vswitchd_LDFLAGS = $(AM_LDFLAGS) $(DPDK_vswitchd_LDFLAGS)
 EXTRA_DIST += vswitchd/INTERNALS
 MAN_ROOTS += vswitchd/ovs-vswitchd.8.in
 
+if LINUX
+vswitchd_ovs_vswitchd_LDADD += lib/libbpf.la
+vswitchd_ovs_vswitchd_LDADD += -lelf
+endif
+
 # vswitch schema and IDL
 EXTRA_DIST += vswitchd/vswitch.ovsschema
 pkgdata_DATA += vswitchd/vswitch.ovsschema
