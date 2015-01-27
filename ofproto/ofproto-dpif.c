@@ -58,6 +58,7 @@
 #include "ofproto-dpif-sflow.h"
 #include "ofproto-dpif-upcall.h"
 #include "ofproto-dpif-xlate.h"
+#include "ofproto-dpif-bpf.h"
 #include "poll-loop.h"
 #include "ovs-rcu.h"
 #include "ovs-router.h"
@@ -292,6 +293,9 @@ struct dpif_backer {
     /* True if the datapath supports masked data in OVS_ACTION_ATTR_SET
      * actions. */
     bool masked_set_action;
+
+    /* True if the datapath supports bpf actions */
+    bool enable_bpf_action;
 
     /* Maximum number of MPLS label stack entries that the datapath supports
      * in a match */
@@ -909,6 +913,7 @@ static bool check_variable_length_userdata(struct dpif_backer *backer);
 static size_t check_max_mpls_depth(struct dpif_backer *backer);
 static bool check_recirc(struct dpif_backer *backer);
 static bool check_ufid(struct dpif_backer *backer);
+static bool check_bpf_actions(struct dpif_backer *backer);
 static bool check_masked_set_action(struct dpif_backer *backer);
 
 static int
@@ -1007,6 +1012,7 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
     backer->max_mpls_depth = check_max_mpls_depth(backer);
     backer->masked_set_action = check_masked_set_action(backer);
     backer->enable_ufid = check_ufid(backer);
+    backer->enable_bpf_action = check_bpf_actions(backer);
     backer->rid_pool = recirc_id_pool_create();
     ovs_mutex_init(&backer->recirc_mutex);
     cmap_init(&backer->recirc_map);
@@ -1031,6 +1037,9 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
      * is non-zero. */
     backer->variable_length_userdata = check_variable_length_userdata(backer);
     backer->dp_version_string = dpif_get_dp_version(backer->dpif);
+
+    /* Load eBPF actions if datapath supports it.  */
+    error = ofproto_dpif_bpf_init(backer->enable_bpf_action);
 
     return error;
 }
@@ -1110,7 +1119,19 @@ check_ufid(struct dpif_backer *backer)
     return enable_ufid;
 }
 
+/* Tests whether 'dpif' supports eBPF base flow actions.
+ *
+ * Returns true if 'dpif' supports eBPF based actions.
+ */
+static bool
+check_bpf_actions( struct dpif_backer *backer OVS_UNUSED)
+{
+    /* XXX */
+    return true;
+}
+
 /* Tests whether 'backer''s datapath supports variable-length
+ *
  * OVS_USERSPACE_ATTR_USERDATA in OVS_ACTION_ATTR_USERSPACE actions.  We need
  * to disable some features on older datapaths that don't support this
  * feature.
