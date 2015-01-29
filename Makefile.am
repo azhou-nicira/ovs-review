@@ -7,7 +7,8 @@
 
 AUTOMAKE_OPTIONS = foreign subdir-objects
 ACLOCAL_AMFLAGS = -I m4
-SUBDIRS = datapath
+# SUBDIRS = datapath
+SUBDIRS =
 
 AM_CPPFLAGS = $(SSL_CFLAGS)
 AM_LDFLAGS = $(SSL_LDFLAGS)

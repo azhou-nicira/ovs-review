@@ -134,7 +134,7 @@ AC_DEFUN([OVS_CHECK_LINUX], [
     AC_MSG_RESULT([$kversion])
 
     if test "$version" -ge 3; then
-       if test "$version" = 3 && test "$patchlevel" -le 18; then
+       if test "$version" = 3 && test "$patchlevel" -le 19; then
           : # Linux 3.x
        else
          AC_ERROR([Linux kernel in $KBUILD is version $kversion, but version newer than 3.18.x is not supported (please refer to the FAQ for advice)])
