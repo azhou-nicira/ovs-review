@@ -15,6 +15,7 @@
 #include <config.h>
 
 #include "ofproto/ofproto-dpif-xlate.h"
+#include "ofproto/ofproto-dpif-bpf.h"
 
 #include <errno.h>
 #include <arpa/inet.h>
@@ -2833,14 +2834,27 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
                                         OVS_ACTION_ATTR_TUNNEL_POP,
                                         odp_tnl_port);
                 } else {
+                    int fd;
+                    struct ovs_action_bpf_prog bpf_output;
+
+                    fd = ofproto_dpif_bpf_lookup("ovs/output");
+
+                    if (fd > 0) {
+                        bpf_output.prog_fd = htonl(fd);
+                        bpf_output.arg0 = htonl(out_port);
+                        bpf_output.arg1 = htonl(0);
+                        nl_msg_push_unspec(ctx->xout->odp_actions,
+                                           OVS_ACTION_ATTR_BPF_PROG,
+                                           &bpf_output, sizeof(bpf_output));
+                    }
                     /* Tunnel push-pop action is not compatible with
                      * IPFIX action. */
                     add_ipfix_output_action(ctx, out_port);
                     nl_msg_put_odp_port(ctx->xout->odp_actions,
                                         OVS_ACTION_ATTR_OUTPUT,
                                         out_port);
-               }
-           }
+                }
+            }
         }
 
         ctx->sflow_odp_port = odp_port;
