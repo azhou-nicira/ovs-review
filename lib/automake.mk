@@ -203,6 +203,8 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/process.h \
 	lib/pvector.c \
 	lib/pvector.h \
+	lib/raft.c \
+	lib/raft.h \
 	lib/random.c \
 	lib/random.h \
 	lib/rconn.c \
