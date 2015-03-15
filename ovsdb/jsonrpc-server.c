@@ -1234,6 +1234,8 @@ ovsdb_jsonrpc_monitor_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
         }
     }
 
+    ovsdb_monitor_add_jsonrpc_monitor(m->dbmon, m);
+
     ovsdb_monitor_get_initial(m->dbmon);
     json = ovsdb_jsonrpc_monitor_compose_update(m, true);
     json = json ? json : json_object_create();
