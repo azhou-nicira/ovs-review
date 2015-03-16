@@ -1157,6 +1157,7 @@ ovsdb_jsonrpc_monitor_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
                              const struct json *request_id)
 {
     struct ovsdb_jsonrpc_monitor *m = NULL;
+    struct ovsdb_monitor *dbmon = NULL;
     struct json *monitor_id, *monitor_requests;
     struct ovsdb_error *error = NULL;
     struct shash_node *node;
@@ -1234,7 +1235,13 @@ ovsdb_jsonrpc_monitor_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
         }
     }
 
-    ovsdb_monitor_add_jsonrpc_monitor(m->dbmon, m);
+    dbmon = ovsdb_monitor_add(m->dbmon);
+    if (dbmon != m->dbmon) {
+        /* Found an exisiting dbmon, reuse the current one. */
+        ovsdb_monitor_remove_jsonrpc_monitor(m->dbmon, m);
+        ovsdb_monitor_add_jsonrpc_monitor(dbmon, m);
+        m->dbmon = dbmon;
+    }
 
     ovsdb_monitor_get_initial(m->dbmon);
     json = ovsdb_jsonrpc_monitor_compose_update(m, true);
