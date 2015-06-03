@@ -19,6 +19,7 @@
 #include "compiler.h"
 #include "hmap.h"
 #include "list.h"
+#include "sset.h"
 #include "shash.h"
 
 struct json;
@@ -50,8 +51,10 @@ struct ovsdb_error *ovsdb_schema_from_json(struct json *,
     OVS_WARN_UNUSED_RESULT;
 struct json *ovsdb_schema_to_json(const struct ovsdb_schema *);
 
+
 bool ovsdb_schema_equal(const struct ovsdb_schema *,
                         const struct ovsdb_schema *);
+
 
 /* Database. */
 struct ovsdb {

@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -307,6 +307,32 @@ ovsdb_schema_equal(const struct ovsdb_schema *a,
 
     return equals;
 }
+
+static struct ovsdb_error *
+ovsdb_schema_join(struct ovsdb_schema *dst, const struct ovsdb_schema *src)
+{
+    struct shash_node *snode, *dnode;
+    struct ovsdb_error *err;
+
+    SHASH_FOR_EACH (snode, &src->tables) {
+        const struct ovsdb_table_schema *sts = snode->data;
+
+        dnode = shash_find(&dst->tables, sts->name);
+        if (dnode) {
+            struct ovsdb_table_schema *dts = dnode->data;
+
+            err = ovsdb_table_schema_join(dts, sts);
+            if (err) {
+                return err;
+            }
+        } else {
+            shash_add(&dst->tables, sts->name, ovsdb_table_schema_clone(sts));
+        }
+    }
+
+    return NULL;
+}
+
 
 static void
 ovsdb_set_ref_table(const struct shash *tables,

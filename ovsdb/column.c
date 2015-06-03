@@ -53,6 +53,19 @@ ovsdb_column_clone(const struct ovsdb_column *old)
                                &old->type);
 }
 
+bool
+ovsdb_column_equal(const struct ovsdb_column *a,
+                   const struct ovsdb_column *b)
+{
+    struct json *ja = ovsdb_column_to_json(a);
+    struct json *jb = ovsdb_column_to_json(b);
+    bool equals = json_equal(ja, jb);
+    json_destroy(ja);
+    json_destroy(jb);
+
+    return equals;
+}
+
 void
 ovsdb_column_destroy(struct ovsdb_column *column)
 {

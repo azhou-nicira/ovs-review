@@ -48,6 +48,8 @@ struct ovsdb_column *ovsdb_column_create(
     const char *name, bool mutable, bool persistent,
     const struct ovsdb_type *);
 struct ovsdb_column *ovsdb_column_clone(const struct ovsdb_column *);
+bool ovsdb_column_equal(const struct ovsdb_column *,
+                        const struct ovsdb_column *);
 void ovsdb_column_destroy(struct ovsdb_column *);
 
 struct ovsdb_error *ovsdb_column_from_json(const struct json *,
