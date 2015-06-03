@@ -455,3 +455,156 @@ ovsdb_remove_replica(struct ovsdb *db OVS_UNUSED, struct ovsdb_replica *r)
     list_remove(&r->node);
     (r->class->destroy)(r);
 }
+
+struct ovsdb_error *
+ovsdb_schemata_join(const struct shash *schemata, struct ovsdb_schema **schemap)
+{
+    struct shash_node *first_node = shash_first(schemata), *node;
+    struct ovsdb_schema *schema;
+    struct ovsdb_error *error;
+
+    ovs_assert(first_node);
+    schema = ovsdb_schema_clone(first_node->data);
+
+    SHASH_FOR_EACH (node, schemata) {
+        struct ovsdb_schema *s = node->data;
+
+        if (node != first_node) {
+            error = ovsdb_schema_join(schema, s);
+
+            if (error) {
+                goto err;
+            }
+        }
+    }
+
+    *schemap = schema;
+    return NULL;
+
+err:
+    ovsdb_schema_destroy(schema);
+    *schemap = NULL;
+    return error;
+}
+
+void
+ovsdb_schemata_destroy(struct shash *schemata)
+{
+    struct shash_node *node, *next;
+
+    SHASH_FOR_EACH_SAFE (node, next, schemata) {
+        struct ovsdb_schema *schema = node->data;
+
+        shash_delete(schemata, node);
+        ovsdb_schema_destroy(schema);
+    }
+    shash_destroy(schemata);
+}
+
+struct ovsdb_error *
+ovsdb_schemata_from_files(struct sset *files, struct shash *schemata)
+{
+    const char *filename;
+
+    ovs_assert(schemata);
+    ovs_assert(ovsdb_schemata_is_empty(schemata));
+
+    SSET_FOR_EACH(filename, files) {
+        struct ovsdb_schema *schema;
+        struct ovsdb_error *err;
+
+        err = ovsdb_schema_from_file(filename, &schema);
+        if (err) {
+            ovsdb_schemata_destroy(schemata);
+            return err;
+        }
+        shash_add(schemata, schema->name, schema);
+    }
+
+    return NULL;
+}
+
+struct json *
+ovsdb_schemata_to_json(const struct shash *schemata)
+{
+    switch (shash_count(schemata)) {
+    case 0:
+        return NULL;
+
+    case 1:
+        {
+            struct shash_node *node;
+            struct ovsdb_schema *schema;
+
+            node = shash_first(schemata);
+            schema = node->data;
+
+            return ovsdb_schema_to_json(schema);
+        }
+
+    default:
+        {
+            struct json *json_schemata;
+            struct shash_node *node;
+
+            json_schemata = json_array_create_empty();
+            SHASH_FOR_EACH (node, schemata) {
+                struct ovsdb_schema *schema = node->data;
+                json_array_add(json_schemata, ovsdb_schema_to_json(schema));
+            }
+            return json_schemata;
+        }
+    }
+}
+
+struct ovsdb_error *
+ovsdb_schemata_from_json(struct json *json, struct shash *schemata)
+{
+    struct ovsdb_schema *schema;
+    struct ovsdb_error *err;
+
+    ovs_assert(ovsdb_schemata_is_empty(schemata));
+
+    switch (json->type) {
+    case JSON_OBJECT:
+        err = ovsdb_schema_from_json(json, &schema);
+        if (err) {
+            goto error;
+        }
+        shash_add(schemata, schema->name, schema);
+        break;
+
+    case JSON_ARRAY:
+        {
+            struct json_array *array = json_array(json);
+            size_t i;
+
+            for(i = 0; i < array->n; i++) {
+                err = ovsdb_schema_from_json(array->elems[i], &schema);
+
+                if (err) {
+                    goto error;
+                }
+                shash_add(schemata, schema->name, schema);
+            }
+        }
+        break;
+
+    case JSON_NULL:
+    case JSON_FALSE:
+    case JSON_TRUE:
+    case JSON_INTEGER:
+    case JSON_REAL:
+    case JSON_STRING:
+    case JSON_N_TYPES:
+    default:
+        OVS_NOT_REACHED();
+    }
+
+    return NULL;
+
+error:
+    ovsdb_schemata_destroy(schemata);
+
+    return err;
+}
