@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+ * Copyright (c) 2009, 2010, 2011, 2012, 2013, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,7 +38,9 @@
 #include "socket-util.h"
 #include "table.h"
 #include "timeval.h"
+#include "sset.h"
 #include "util.h"
+#include "shash.h"
 #include "openvswitch/vlog.h"
 
 /* -m, --more: Verbosity level for "show-log" command output. */
@@ -56,12 +58,14 @@ int
 main(int argc, char *argv[])
 {
     struct ovs_cmdl_context ctx = { .argc = 0, };
+
     set_program_name(argv[0]);
     parse_options(argc, argv);
     fatal_ignore_sigpipe();
     ctx.argc = argc - optind;
     ctx.argv = argv + optind;
     ovs_cmdl_run_command(&ctx, get_all_commands());
+
     return 0;
 }
 
@@ -188,20 +192,33 @@ check_ovsdb_error(struct ovsdb_error *error)
         ovs_fatal(0, "%s", ovsdb_error_to_string(error));
     }
 }
+
+static void
+parse_schema_file_names(const char *file_names, struct sset *names)
+{
+   ovsdb_parse_schema_file_names(file_names, names, default_schema());
+   ovs_assert(!sset_is_empty(names));
+}
+
 
 static void
 do_create(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
-    const char *schema_file_name = ctx->argc >= 3 ? ctx->argv[2] : default_schema();
-    struct ovsdb_schema *schema;
+    const char *schema_file_name = ctx->argc >= 3 ? ctx->argv[2] : NULL;
     struct ovsdb_log *log;
     struct json *json;
+    struct shash schemata = SHASH_INITIALIZER(&schemata);
+    struct sset schema_names = SSET_INITIALIZER(&schema_names);
 
-    /* Read schema from file and convert to JSON. */
-    check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
-    json = ovsdb_schema_to_json(schema);
-    ovsdb_schema_destroy(schema);
+    /* Read schema from file(s) and convert to JSON. */
+    parse_schema_file_names(schema_file_name, &schema_names);
+
+    check_ovsdb_error(ovsdb_schemata_from_files(&schema_names, &schemata));
+    sset_destroy(&schema_names);
+
+    json = ovsdb_schemata_to_json(&schemata);
+    ovsdb_schemata_destroy(&schemata);
 
     /* Create database file. */
     check_ovsdb_error(ovsdb_log_open(db_file_name, OVSDB_LOG_CREATE,
@@ -215,7 +232,7 @@ do_create(struct ovs_cmdl_context *ctx)
 
 static void
 compact_or_convert(const char *src_name_, const char *dst_name_,
-                   const struct ovsdb_schema *new_schema,
+                   struct shash *new_schemata,
                    const char *comment)
 {
     char *src_name, *dst_name;
@@ -249,9 +266,9 @@ compact_or_convert(const char *src_name_, const char *dst_name_,
     }
 
     /* Save a copy. */
-    check_ovsdb_error(new_schema
-                      ? ovsdb_file_open_as_schema(src_name, new_schema, &db)
-                      : ovsdb_file_open(src_name, true, &db, NULL));
+    check_ovsdb_error(ovsdb_schemata_is_null_or_empty(new_schemata)
+                      ? ovsdb_file_open(src_name, true, &db, NULL, new_schemata)
+                      : ovsdb_file_open_as_schemata(src_name, new_schemata, &db));
     check_ovsdb_error(ovsdb_file_save_copy(dst_name, false, comment, db));
     ovsdb_destroy(db);
 
@@ -287,72 +304,153 @@ static void
 do_convert(struct ovs_cmdl_context *ctx)
 {
     const char *db = ctx->argc >= 2 ? ctx->argv[1] : default_db();
-    const char *schema = ctx->argc >= 3 ? ctx->argv[2] : default_schema();
+    const char *schema_file_name = ctx->argc >= 3 ? ctx->argv[2] : NULL;
     const char *target = ctx->argc >= 4 ? ctx->argv[3] : NULL;
-    struct ovsdb_schema *new_schema;
+    struct shash schemata = SHASH_INITIALIZER(&schemata);
+    struct sset schema_names = SSET_INITIALIZER(&schema_names);
 
-    check_ovsdb_error(ovsdb_schema_from_file(schema, &new_schema));
-    compact_or_convert(db, target, new_schema,
+    parse_schema_file_names(schema_file_name, &schema_names);
+    check_ovsdb_error(ovsdb_schemata_from_files(&schema_names, &schemata));
+    sset_destroy(&schema_names);
+
+    compact_or_convert(db, target, &schemata,
                        "converted by ovsdb-tool "VERSION);
-    ovsdb_schema_destroy(new_schema);
+    ovsdb_schemata_destroy(&schemata);
 }
 
 static void
 do_needs_conversion(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
-    const char *schema_file_name = ctx->argc >= 3 ? ctx->argv[2] : default_schema();
-    struct ovsdb_schema *schema1, *schema2;
+    const char *schema_file_name = ctx->argc >= 3 ? ctx->argv[2] : NULL;
+    struct shash schemata1 = SHASH_INITIALIZER(&schemata1);
+    struct shash schemata2 = SHASH_INITIALIZER(&schemata2);
+    struct shash_node *node1, *node2;
+    bool need_conversion = false;
+    struct sset schema_names = SSET_INITIALIZER(&schema_names);
 
-    check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema1));
-    check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema2));
-    puts(ovsdb_schema_equal(schema1, schema2) ? "no" : "yes");
-    ovsdb_schema_destroy(schema1);
-    ovsdb_schema_destroy(schema2);
+
+    /* Read schema from file(s) and convert to JSON. */
+    parse_schema_file_names(schema_file_name, &schema_names);
+    check_ovsdb_error(ovsdb_schemata_from_files(&schema_names, &schemata1));
+    sset_destroy(&schema_names);
+
+    check_ovsdb_error(ovsdb_file_read_schemata(db_file_name, &schemata2));
+
+    SHASH_FOR_EACH (node1, &schemata1) {
+        struct ovsdb_schema *schema1 = node1->data;
+
+        node2 = shash_find(&schemata2, schema1->name);
+        if (node2) {
+            const struct ovsdb_schema *schema2 = node2->data;
+
+            need_conversion = ovsdb_schema_equal(schema1, schema2);
+        }
+
+        if (!need_conversion) {
+            break;
+        }
+    }
+
+    puts(need_conversion ? "no" : "yes");
+
+    ovsdb_schemata_destroy(&schemata1);
+    ovsdb_schemata_destroy(&schemata2);
 }
 
 static void
 do_db_version(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
+    struct shash schemata = SHASH_INITIALIZER(&schemata);
     struct ovsdb_schema *schema;
 
-    check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema));
-    puts(schema->version);
-    ovsdb_schema_destroy(schema);
+    check_ovsdb_error(ovsdb_file_read_schemata(db_file_name, &schemata));
+
+    if (shash_count(&schemata) == 1) {
+        schema = shash_first(&schemata)->data;
+        puts(schema->version);
+    } else {
+        struct shash_node *node;
+        SHASH_FOR_EACH (node, &schemata) {
+            schema = node->data;
+            printf("%s:%s\n", schema->name, schema->version);
+        }
+    }
+
+    ovsdb_schemata_destroy(&schemata);
 }
 
 static void
 do_db_cksum(struct ovs_cmdl_context *ctx)
 {
     const char *db_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_db();
+    struct shash schemata = SHASH_INITIALIZER(&schemata);
     struct ovsdb_schema *schema;
 
-    check_ovsdb_error(ovsdb_file_read_schema(db_file_name, &schema));
-    puts(schema->cksum);
-    ovsdb_schema_destroy(schema);
+    check_ovsdb_error(ovsdb_file_read_schemata(db_file_name, &schemata));
+
+    if (shash_count(&schemata) == 1) {
+        schema = shash_first(&schemata)->data;
+        puts(schema->cksum);
+    } else {
+        struct shash_node *node;
+        SHASH_FOR_EACH (node, &schemata) {
+            schema = node->data;
+            printf("%s:%s\n", schema->name, schema->cksum);
+        }
+    }
+    ovsdb_schemata_destroy(&schemata);
 }
 
 static void
 do_schema_version(struct ovs_cmdl_context *ctx)
 {
     const char *schema_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_schema();
+    struct shash schemata = SHASH_INITIALIZER(&schemata);
     struct ovsdb_schema *schema;
+    struct sset schema_names = SSET_INITIALIZER(&schema_names);
 
-    check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
-    puts(schema->version);
-    ovsdb_schema_destroy(schema);
+    parse_schema_file_names(schema_file_name, &schema_names);
+    check_ovsdb_error(ovsdb_schemata_from_files(&schema_names, &schemata));
+    sset_destroy(&schema_names);
+
+    if (shash_count(&schemata) == 1) {
+        schema = shash_first(&schemata)->data;
+        puts(schema->version);
+    } else {
+        struct shash_node *node;
+        SHASH_FOR_EACH (node, &schemata) {
+            schema = node->data;
+            printf("%s:%s\n", schema->name, schema->version);
+        }
+    }
+    ovsdb_schemata_destroy(&schemata);
 }
 
 static void
 do_schema_cksum(struct ovs_cmdl_context *ctx)
 {
-    const char *schema_file_name = ctx->argc >= 2 ? ctx->argv[1] : default_schema();
+    const char *schema_file_name = ctx->argc >= 2 ? ctx->argv[1] : NULL;
+    struct shash schemata = SHASH_INITIALIZER(&schemata);
     struct ovsdb_schema *schema;
+    struct sset schema_names = SSET_INITIALIZER(&schema_names);
 
-    check_ovsdb_error(ovsdb_schema_from_file(schema_file_name, &schema));
-    puts(schema->cksum);
-    ovsdb_schema_destroy(schema);
+    parse_schema_file_names(schema_file_name, &schema_names);
+    check_ovsdb_error(ovsdb_schemata_from_files(&schema_names, &schemata));
+    sset_destroy(&schema_names);
+
+    if (shash_count(&schemata) == 1) {
+        schema = shash_first(&schemata)->data;
+        puts(schema->cksum);
+    } else {
+        struct shash_node *node;
+        SHASH_FOR_EACH (node, &schemata) {
+            schema = node->data;
+            printf("%s:%s\n", schema->name, schema->cksum);
+        }
+    }
+    ovsdb_schemata_destroy(&schemata);
 }
 
 static void
@@ -363,7 +461,7 @@ transact(bool read_only, int argc, char *argv[])
     struct json *request, *result;
     struct ovsdb *db;
 
-    check_ovsdb_error(ovsdb_file_open(db_file_name, read_only, &db, NULL));
+    check_ovsdb_error(ovsdb_file_open(db_file_name, read_only, &db, NULL, NULL));
 
     request = parse_json(transaction);
     result = ovsdb_execute(db, NULL, request, 0, NULL);

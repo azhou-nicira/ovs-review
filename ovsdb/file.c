@@ -64,7 +64,7 @@ static struct ovsdb_error *ovsdb_file_txn_commit(struct json *,
                                                  struct ovsdb_log *);
 
 static struct ovsdb_error *ovsdb_file_open__(const char *file_name,
-                                             const struct ovsdb_schema *,
+                                             struct shash *schemata,
                                              bool read_only, struct ovsdb **,
                                              struct ovsdb_file **);
 static struct ovsdb_error *ovsdb_file_txn_from_json(
@@ -85,20 +85,28 @@ static struct ovsdb_error *ovsdb_file_create(struct ovsdb *,
  * '*filep' to an ovsdb_file that represents the open file.  This ovsdb_file
  * persists until '*dbp' is destroyed.
  *
+ * If 'schemata' is nonnull, it needs to be an empty shash. On success,
+ * it contains the schemata read from the log file. Caller is repsonsible
+ * for freeing memory.
+ *
  * On success, returns NULL.  On failure, returns an ovsdb_error (which the
  * caller must destroy) and sets '*dbp' and '*filep' to NULL. */
 struct ovsdb_error *
 ovsdb_file_open(const char *file_name, bool read_only,
-                struct ovsdb **dbp, struct ovsdb_file **filep)
+                struct ovsdb **dbp, struct ovsdb_file **filep,
+                struct shash *schemata)
 {
-    return ovsdb_file_open__(file_name, NULL, read_only, dbp, filep);
+    if (schemata) {
+        ovs_assert(shash_count(schemata) == 0);
+    }
+    return ovsdb_file_open__(file_name, schemata, read_only, dbp, filep);
 }
 
-/* Opens database 'file_name' with an alternate schema.  The specified 'schema'
- * is used to interpret the data in 'file_name', ignoring the schema actually
- * stored in the file.  Data in the file for tables or columns that do not
- * exist in 'schema' are ignored, but the ovsdb file format must otherwise be
- * observed, including column constraints.
+/* Opens database 'file_name' with an alternate schemata.  The specified
+ * 'schemata' * is used to interpret the data in 'file_name', ignoring the
+ * schemata actually stored in the file.  Data in the file for tables or
+ * columns that do not exist in 'schemata' are ignored, but the ovsdb file
+ * format must otherwise be observed, including column constraints.
  *
  * This function can be useful for upgrading or downgrading databases to
  * "almost-compatible" formats.
@@ -110,23 +118,22 @@ ovsdb_file_open(const char *file_name, bool read_only,
  * null pointer.  On failure, returns an ovsdb_error (which the caller must
  * destroy) and sets '*dbp' to NULL. */
 struct ovsdb_error *
-ovsdb_file_open_as_schema(const char *file_name,
-                          const struct ovsdb_schema *schema,
-                          struct ovsdb **dbp)
+ovsdb_file_open_as_schemata(const char *file_name,
+                            struct shash *schemata,
+                            struct ovsdb **dbp)
 {
-    return ovsdb_file_open__(file_name, schema, true, dbp, NULL);
+    return ovsdb_file_open__(file_name, schemata, true, dbp, NULL);
 }
 
 static struct ovsdb_error *
 ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
-                    struct ovsdb_log **logp, struct ovsdb_schema **schemap)
+                    struct ovsdb_log **logp, struct shash *schemata)
 {
-    struct ovsdb_schema *schema = NULL;
     struct ovsdb_log *log = NULL;
     struct ovsdb_error *error;
     struct json *json = NULL;
 
-    ovs_assert(logp || schemap);
+    ovs_assert(logp || schemata);
 
     error = ovsdb_log_open(file_name, open_mode, -1, &log);
     if (error) {
@@ -142,8 +149,8 @@ ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
         goto error;
     }
 
-    if (schemap) {
-        error = ovsdb_schema_from_json(json, &schema);
+    if (ovsdb_schemata_is_empty(schemata)) {
+        error = ovsdb_schemata_from_json(json, schemata);
         if (error) {
             error = ovsdb_wrap_error(error,
                                      "failed to parse \"%s\" as ovsdb schema",
@@ -158,9 +165,6 @@ ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
     } else {
         ovsdb_log_close(log);
     }
-    if (schemap) {
-        *schemap = schema;
-    }
     return NULL;
 
 error:
@@ -169,44 +173,57 @@ error:
     if (logp) {
         *logp = NULL;
     }
-    if (schemap) {
-        *schemap = NULL;
-    }
     return error;
 }
 
 static struct ovsdb_error *
 ovsdb_file_open__(const char *file_name,
-                  const struct ovsdb_schema *alternate_schema,
+                  struct shash *schemata,
                   bool read_only, struct ovsdb **dbp,
                   struct ovsdb_file **filep)
 {
     enum ovsdb_log_open_mode open_mode;
     unsigned int n_transactions;
-    struct ovsdb_schema *schema = NULL;
+    struct ovsdb_schema *joined_schema;
     struct ovsdb_error *error;
     struct ovsdb_log *log;
     struct json *json;
     struct ovsdb *db = NULL;
+    bool convert = ovsdb_schemata_is_non_empty(schemata);
+    struct shash local_schemata = SHASH_INITIALIZER(&local_schemata);
+
+    /* If caller passed in non empty 'schemata',  we will use it
+     * instead of the schemata stored int the log file.  Otherwise,
+     * it will be the container for storing the schemata read from
+     * the log file.  */
+    if (!schemata) {
+        /* Caller don't need the schmeta information, we use 'local_schemata'
+         * to read it from the db file. */
+        schemata = &local_schemata;
+    }
 
     /* In read-only mode there is no ovsdb_file so 'filep' must be null. */
     ovs_assert(!(read_only && filep));
 
     open_mode = read_only ? OVSDB_LOG_READ_ONLY : OVSDB_LOG_READ_WRITE;
-    error = ovsdb_file_open_log(file_name, open_mode, &log,
-                                alternate_schema ? NULL : &schema);
+    error = ovsdb_file_open_log(file_name, open_mode, &log, schemata);
     if (error) {
         goto error;
     }
 
-    db = ovsdb_create(schema ? schema : ovsdb_schema_clone(alternate_schema));
+    error = ovsdb_schemata_join(schemata, &joined_schema);
+    if (error) {
+        goto error;
+    }
+
+    /* 'db' will take the ownership of joined_schema */
+    db = ovsdb_create(joined_schema);
 
     n_transactions = 0;
     while ((error = ovsdb_log_read(log, &json)) == NULL && json) {
         struct ovsdb_txn *txn;
 
-        error = ovsdb_file_txn_from_json(db, json, alternate_schema != NULL,
-                                         &txn);
+        error = ovsdb_file_txn_from_json(db, json, convert, &txn);
         json_destroy(json);
         if (error) {
             ovsdb_log_unread(log);
@@ -246,6 +263,7 @@ ovsdb_file_open__(const char *file_name,
     }
 
     *dbp = db;
+    ovsdb_schemata_destroy(&local_schemata);
     return NULL;
 
 error:
@@ -253,6 +271,7 @@ error:
     if (filep) {
         *filep = NULL;
     }
+    ovsdb_schemata_destroy(&local_schemata);
     ovsdb_destroy(db);
     ovsdb_log_close(log);
     return error;
@@ -484,10 +503,10 @@ ovsdb_file_save_copy(const char *file_name, int locking,
  * schema.  On failure, returns an ovsdb_error (which the caller must destroy)
  * and sets '*dbp' to NULL. */
 struct ovsdb_error *
-ovsdb_file_read_schema(const char *file_name, struct ovsdb_schema **schemap)
+ovsdb_file_read_schemata(const char *file_name, struct shash *schemata)
 {
-    ovs_assert(schemap != NULL);
-    return ovsdb_file_open_log(file_name, OVSDB_LOG_READ_ONLY, NULL, schemap);
+    ovs_assert(schemata && ovsdb_schemata_is_empty(schemata));
+    return ovsdb_file_open_log(file_name, OVSDB_LOG_READ_ONLY, NULL, schemata);
 }
 
 /* Replica implementation. */
