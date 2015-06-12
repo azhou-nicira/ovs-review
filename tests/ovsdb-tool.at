@@ -341,3 +341,155 @@ AT_CHECK([diff schema schema2], [1], [ignore])
 AT_CHECK([ovsdb-tool needs-conversion db schema2], [0], [yes
 ])
 AT_CLEANUP
+
+m4_divert_push([PREPARE_TESTS])
+[
+
+extened_ordinal_schema () {
+    cat <<'EOF'
+    {"name": "ordinals",
+     "tables": {
+       "ordinals": {
+         "columns": {
+           "number": {"type": "integer"},
+           "name": {"type": "string"},
+           "comment": {"type": "string"}},
+         "indexes": [["number"]]}},
+     "version": "5.2.3",
+     "cksum": "22345678 9"}
+EOF
+}
+
+reduced_ordinal_schema () {
+    cat <<'EOF'
+    {"name": "ordinals",
+     "tables": {
+       "ordinals": {
+         "columns": {
+           "number": {"type": "integer"}},
+         "indexes": [["number"]]}},
+     "version": "6.1.3",
+     "cksum": "32345678 9"}
+EOF
+}
+
+incompatible_ordinal_schema () {
+    cat <<'EOF'
+    {"name": "ordinals",
+     "tables": {
+       "ordinals": {
+         "columns": {
+           "name": {"type": "string"},
+           "number": {"type": "string"}},
+         "indexes": [["number"]]}},
+     "version": "5.1.4",
+     "cksum": "42345678 9"}
+EOF
+}
+
+]
+m4_divert_pop([PREPARE_TESTS])
+
+AT_SETUP([ovsdb-tool create join compatibles])
+AT_KEYWORDS([ovsdb file join positive])
+ordinal_schema > schema
+extened_ordinal_schema > extended
+reduced_ordinal_schema > reduced
+touch .db.~lock~
+AT_CHECK([ovsdb-tool create db 'schema, extended, reduced'], [0], [], [ignore])
+AT_CHECK([[ovsdb-tool transact db '
+    ["ordinals",
+     {"op": "insert",
+      "table": "ordinals",
+      "row": {"number": 5}}
+    ]']], [0], [stdout], [ignore])
+AT_CHECK([grep "\"number\":5" db], [0], [ignore])
+AT_CLEANUP
+
+AT_SETUP([ovsdb-tool reject join incompatible])
+AT_KEYWORDS([ovsdb file join negative])
+ordinal_schema > schema
+incompatible_ordinal_schema > incompatible
+touch .db.~lock~
+AT_CHECK([ovsdb-tool create db 'schema, incompatible'], [0], [], [ignore])
+AT_CLEANUP
+
+AT_SETUP([ovsdb-tool reject join idential schema])
+AT_KEYWORDS([ovsdb file join negative])
+ordinal_schema > schema0
+ordinal_schema > schema1
+touch .db.~lock~
+AT_CHECK([ovsdb-tool create db 'schema0, schema1'], [0], [], [ignore])
+AT_CLEANUP
+
+AT_SETUP([ovsdb-tool convert joined schema to single])
+AT_KEYWORDS([ovsdb file join positive])
+ordinal_schema > schema
+extened_ordinal_schema > extended
+touch .db.~lock~
+AT_CHECK([ovsdb-tool create db 'schema, extended'], [0], [], [ignore])
+AT_CHECK([ovsdb-tool convert db schema], [0], [ignore])
+AT_CHECK([ovsdb-tool db-version db], [0], [5.1.3
+])
+AT_CLEANUP
+
+AT_SETUP([ovsdb-tool convert single schema to joined])
+AT_KEYWORDS([ovsdb file join positive])
+ordinal_schema > schema
+extened_ordinal_schema > extended
+touch .db.~lock~
+AT_CHECK([ovsdb-tool create db 'schema'], [0], [], [ignore])
+AT_CHECK([ovsdb-tool convert db 'schema, extended'], [0], [ignore])
+AT_CHECK([ovsdb-tool db-version db], [0], [5.1.3
+])
+AT_CLEANUP
+
+AT_SETUP([ovsdb-tool needs-conversion joined schema])
+AT_KEYWORDS([ovsdb file join positive])
+ordinal_schema > schema
+extened_ordinal_schema > extended
+reduced_ordinal_schema > reduced
+touch .db.~lock~
+AT_CHECK([ovsdb-tool create db 'schema, extended'], [0], [], [ignore])
+AT_CHECK([ovsdb-tool needs-conversion db 'schema, reduced'], [0], [yes
+])
+AT_CLEANUP
+
+AT_SETUP([ovsdb-tool db-version joined schema])
+AT_KEYWORDS([ovsdb file join positive])
+ordinal_schema > schema
+extened_ordinal_schema > extended
+touch .db.~lock~
+AT_CHECK([ovsdb-tool create db 'schema, extended'], [0], [], [ignore])
+AT_CHECK([ovsdb-tool db-version db], [0], [ordinals:5.1.3
+ordinals:5.2.3
+])
+AT_CLEANUP
+
+AT_SETUP([ovsdb-tool schema-version joined schema])
+AT_KEYWORDS([ovsdb file join positive])
+ordinal_schema > schema
+extened_ordinal_schema > extended
+AT_CHECK([ovsdb-tool schema-version 'schema, extended'], [0], [ordinals:5.1.3
+ordinals:5.2.3
+])
+AT_CLEANUP
+
+AT_SETUP([ovsdb-tool db-cksum joined schema])
+AT_KEYWORDS([ovsdb file join positive])
+ordinal_schema > schema
+extened_ordinal_schema > extended
+AT_CHECK([ovsdb-tool create db 'schema, extended'], [0], [], [ignore])
+AT_CHECK([ovsdb-tool db-cksum db], [0], [ordinals:12345678 9
+ordinals:22345678 9
+])
+AT_CLEANUP
+
+AT_SETUP([ovsdb-tool schema-cksum joined schema])
+AT_KEYWORDS([ovsdb file join positive])
+ordinal_schema > schema
+extened_ordinal_schema > extended
+AT_CHECK([ovsdb-tool schema-cksum 'schema, extended'], [0], [ordinals:12345678 9
+ordinals:22345678 9
+])
+AT_CLEANUP
