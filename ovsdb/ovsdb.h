@@ -52,6 +52,8 @@ struct ovsdb_error *ovsdb_schema_from_json(struct json *,
 struct json *ovsdb_schema_to_json(const struct ovsdb_schema *);
 
 /* Multiple schemas. */
+void ovsdb_parse_schema_file_names(const char *file_names, struct sset *names,
+                                   const char *default_schema);
 struct ovsdb_error *ovsdb_schemata_from_files(struct sset *files,
                                               struct shash* schemata);
 void ovsdb_schemata_destroy(struct shash *schemata);
