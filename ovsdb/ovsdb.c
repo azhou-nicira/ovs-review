@@ -24,6 +24,7 @@
 #include "ovsdb-parser.h"
 #include "ovsdb-types.h"
 #include "simap.h"
+#include "sset.h"
 #include "table.h"
 #include "transaction.h"
 
@@ -676,4 +677,41 @@ error:
     *schemasp = NULL;
 
     return err;
+}
+
+/*
+ * Parse schema file names from a string.
+ *
+ * A leading comma indicates the default schema name.
+ *
+ * Duplicated filenames will be ignored.   */
+void
+ovsdb_parse_schema_file_names(const char *file_names, struct sset *name_set,
+                              const char *default_schema)
+{
+    const char *delimiter=", \t\r\n";
+    const char *filename;
+    char *saveptr;
+    char *fns;
+
+    if (!file_names) {
+        sset_add(name_set, default_schema);
+        return;
+    }
+
+    if (*file_names == ',') {
+        sset_add(name_set, default_schema);
+    }
+
+    fns = xstrdup(file_names);
+    filename = strtok_r(fns, delimiter, &saveptr);
+    if (!filename) {
+        filename = default_schema;
+    }
+
+    while(filename) {
+        sset_add(name_set, filename);
+        filename = strtok_r(NULL, delimiter, &saveptr);
+    }
+    free(fns);
 }

@@ -56,6 +56,8 @@ struct shash *ovsdb_schemas_clone(const struct shash *schemas);
 struct ovsdb_error *ovsdb_schemas_from_files(const struct sset *files,
                                              struct shash** )
     OVS_WARN_UNUSED_RESULT;
+void ovsdb_parse_schema_file_names(const char *file_names, struct sset *names,
+                                   const char *default_schema);
 void ovsdb_schemas_destroy(struct shash *schemas);
 struct json *ovsdb_schemas_to_json(const struct shash *schemas)
     OVS_WARN_UNUSED_RESULT;
