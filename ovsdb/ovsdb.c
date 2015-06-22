@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -72,6 +72,35 @@ ovsdb_schema_destroy(struct ovsdb_schema *schema)
     free(schema->version);
     free(schema->cksum);
     free(schema);
+}
+
+/* Join two schemas into a single schema, by adding missing tables from 'src'
+ * to 'dst'. In case 'src' and 'dst' both has the same table, the joined 'dst' table
+ * will contain the columns from both 'src' and 'dst' tables.  */
+static struct ovsdb_error *
+ovsdb_schema_join(struct ovsdb_schema *dst, const struct ovsdb_schema *src)
+{
+    struct shash_node *snode;
+
+    SHASH_FOR_EACH (snode, &src->tables) {
+        const struct ovsdb_table_schema *sts = snode->data;
+        struct shash_node *dnode;
+
+        dnode = shash_find(&dst->tables, sts->name);
+        if (dnode) {
+            struct ovsdb_table_schema *dts = dnode->data;
+            struct ovsdb_error *err;
+
+            err = ovsdb_table_schema_join(dts, sts);
+            if (err) {
+                return err;
+            }
+        } else {
+            shash_add(&dst->tables, sts->name, ovsdb_table_schema_clone(sts));
+        }
+    }
+
+    return NULL;
 }
 
 struct ovsdb_error *
@@ -428,4 +457,41 @@ ovsdb_remove_replica(struct ovsdb *db OVS_UNUSED, struct ovsdb_replica *r)
 {
     list_remove(&r->node);
     (r->class->destroy)(r);
+}
+
+/* Join each schema within 'schemas' into a single joined schema.
+ * 'schemas' passed in should have at least one schema.
+ *
+ * On success, this function returns NULL, 'schemap' points to the newly created
+ * joined schema. The caller is responsible for reclaiming memory via
+ * ovsdb_schema_destroy().
+ *
+ * On error, an ovsdb_error will be allocated describing the error, the caller
+ * is only needs to dispose memory of the error. */
+struct ovsdb_error *
+ovsdb_schemas_join(const struct shash *schemas, struct ovsdb_schema **schemap)
+{
+    struct shash_node *first_node = shash_first(schemas), *node;
+    struct ovsdb_schema *schema;
+
+    ovs_assert(first_node);
+    schema = ovsdb_schema_clone(first_node->data);
+
+    SHASH_FOR_EACH (node, schemas) {
+        struct ovsdb_error *error;
+
+        if (node == first_node) {
+            continue;
+        }
+
+        error = ovsdb_schema_join(schema, node->data);
+        if (error) {
+            ovsdb_schema_destroy(schema);
+            *schemap = NULL;
+            return error;
+        }
+    }
+
+    *schemap = schema;
+    return NULL;
 }

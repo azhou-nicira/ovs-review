@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -52,6 +52,10 @@ struct json *ovsdb_schema_to_json(const struct ovsdb_schema *);
 
 bool ovsdb_schema_equal(const struct ovsdb_schema *,
                         const struct ovsdb_schema *);
+
+struct ovsdb_error *ovsdb_schemas_join(const struct shash *schemas,
+                                       struct ovsdb_schema **)
+    OVS_WARN_UNUSED_RESULT;
 
 /* Database. */
 struct ovsdb {

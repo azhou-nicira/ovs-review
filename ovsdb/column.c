@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -51,6 +51,20 @@ ovsdb_column_clone(const struct ovsdb_column *old)
     return ovsdb_column_create(old->name,
                                old->mutable, old->persistent,
                                &old->type);
+}
+
+bool
+ovsdb_column_equal(const struct ovsdb_column *a,
+                   const struct ovsdb_column *b)
+{
+    struct json *ja = ovsdb_column_to_json(a);
+    struct json *jb = ovsdb_column_to_json(b);
+    bool equals = json_equal(ja, jb);
+
+    json_destroy(ja);
+    json_destroy(jb);
+
+    return equals;
 }
 
 void

@@ -39,6 +39,9 @@ struct ovsdb_table_schema *ovsdb_table_schema_create(
     const char *name, bool mutable, unsigned int max_rows, bool is_root);
 struct ovsdb_table_schema *ovsdb_table_schema_clone(
     const struct ovsdb_table_schema *);
+struct ovsdb_error *ovsdb_table_schema_join(struct ovsdb_table_schema *,
+                                            const struct ovsdb_table_schema *)
+    OVS_WARN_UNUSED_RESULT;
 void ovsdb_table_schema_destroy(struct ovsdb_table_schema *);
 
 struct ovsdb_error *ovsdb_table_schema_from_json(const struct json *,

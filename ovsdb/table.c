@@ -102,6 +102,45 @@ ovsdb_table_schema_clone(const struct ovsdb_table_schema *old)
     return new;
 }
 
+struct ovsdb_error *
+ovsdb_table_schema_join(struct ovsdb_table_schema *dst,
+                        const struct ovsdb_table_schema *src)
+{
+    struct shash_node *node;
+
+#undef CHECK_TABLE_FIELD
+#define CHECK_TABLE_FIELD(dst, src, field) \
+    if (dst->field != src->field) {                                    \
+         return ovsdb_error("schema join error",                       \
+                            "attribute %s of table %s match failed",   \
+                             #field, dst->name);                       \
+    }
+
+    CHECK_TABLE_FIELD(dst, src, mutable);
+    CHECK_TABLE_FIELD(dst, src, is_root);
+    CHECK_TABLE_FIELD(dst, src, max_rows);
+
+#undef CHECK_TABLE_FIELD
+
+    SHASH_FOR_EACH (node, &src->columns) {
+        struct ovsdb_column *scol = node->data;
+        const struct ovsdb_column *dcol;
+
+        dcol = ovsdb_table_schema_get_column(dst, scol->name);
+        if (dcol) {
+            if (!ovsdb_column_equal(dcol, scol)) {
+                return ovsdb_error("schema join error",
+                                   "column %s of table %s match failed",
+                                   dcol->name, dst->name);
+            }
+        } else {
+            add_column(dst, ovsdb_column_clone(scol));
+        }
+    }
+
+    return NULL;
+}
+
 void
 ovsdb_table_schema_destroy(struct ovsdb_table_schema *ts)
 {
