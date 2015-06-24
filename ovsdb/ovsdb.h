@@ -92,16 +92,17 @@ struct ovsdb_error *ovsdb_schemas_join(const struct shash *schemas,
 
 /* Database. */
 struct ovsdb {
-    struct ovsdb_schema *schema;
-    struct ovs_list replicas;   /* Contains "struct ovsdb_replica"s. */
-    struct shash tables;        /* Contains "struct ovsdb_table *"s. */
+    struct ovsdb_schema *schema; /* The joined schema for run time.  */
+    struct shash *schemas;       /* The schemas stored in the DB file. */
+    struct ovs_list replicas;    /* Contains "struct ovsdb_replica"s. */
+    struct shash tables;         /* Contains "struct ovsdb_table *"s. */
 
     /* Triggers. */
     struct ovs_list triggers;   /* Contains "struct ovsdb_trigger"s. */
     bool run_triggers;
 };
 
-struct ovsdb *ovsdb_create(struct ovsdb_schema *);
+struct ovsdb *ovsdb_create(struct ovsdb_schema *schema, struct shash *schemas);
 void ovsdb_destroy(struct ovsdb *);
 
 void ovsdb_get_memory_usage(const struct ovsdb *, struct simap *usage);

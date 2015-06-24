@@ -199,7 +199,8 @@ ovsdb_file_open__(const char *file_name,
         goto error;
     }
 
-    db = ovsdb_create(schema ? schema : ovsdb_schema_clone(alternate_schema));
+    db = ovsdb_create(schema ? schema : ovsdb_schema_clone(alternate_schema),
+                      NULL);
 
     n_transactions = 0;
     while ((error = ovsdb_log_read(log, &json)) == NULL && json) {

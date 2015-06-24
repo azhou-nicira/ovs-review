@@ -365,13 +365,14 @@ ovsdb_set_ref_table(const struct shash *tables,
 }
 
 struct ovsdb *
-ovsdb_create(struct ovsdb_schema *schema)
+ovsdb_create(struct ovsdb_schema *schema, struct shash *schemas)
 {
     struct shash_node *node;
     struct ovsdb *db;
 
     db = xmalloc(sizeof *db);
     db->schema = schema;
+    db->schemas = schemas;
     list_init(&db->replicas);
     list_init(&db->triggers);
     db->run_triggers = false;
@@ -425,6 +426,9 @@ ovsdb_destroy(struct ovsdb *db)
         shash_clear(&db->schema->tables);
 
         ovsdb_schema_destroy(db->schema);
+        if (db->schemas) {
+            ovsdb_schemas_destroy(db->schemas);
+        }
         free(db);
     }
 }
