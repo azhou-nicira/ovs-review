@@ -64,7 +64,7 @@ static struct ovsdb_error *ovsdb_file_txn_commit(struct json *,
                                                  struct ovsdb_log *);
 
 static struct ovsdb_error *ovsdb_file_open__(const char *file_name,
-                                             const struct ovsdb_schema *,
+                                             const struct shash *,
                                              bool read_only, struct ovsdb **,
                                              struct ovsdb_file **);
 static struct ovsdb_error *ovsdb_file_txn_from_json(
@@ -110,23 +110,43 @@ ovsdb_file_open(const char *file_name, bool read_only,
  * null pointer.  On failure, returns an ovsdb_error (which the caller must
  * destroy) and sets '*dbp' to NULL. */
 struct ovsdb_error *
+ovsdb_file_open_as_schemas(const char *file_name,
+                           const struct shash *schemas,
+                           struct ovsdb **dbp)
+{
+    return ovsdb_file_open__(file_name, schemas, true, dbp, NULL);
+}
+
+struct ovsdb_error *
 ovsdb_file_open_as_schema(const char *file_name,
                           const struct ovsdb_schema *schema,
                           struct ovsdb **dbp)
 {
-    return ovsdb_file_open__(file_name, schema, true, dbp, NULL);
+    struct shash *schemas;
+    struct ovsdb_error *err;
+
+    schemas = xmalloc(sizeof *schemas);
+    shash_init(schemas);
+    shash_add(schemas, schema->name, ovsdb_schema_clone(schema));
+
+    err = ovsdb_file_open__(file_name, schemas, true, dbp, NULL);
+    if (err) {
+        ovsdb_schemas_destroy(schemas);
+    }
+
+    return err;
 }
 
 static struct ovsdb_error *
 ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
-                    struct ovsdb_log **logp, struct ovsdb_schema **schemap)
+                    struct ovsdb_log **logp, struct shash **schemasp)
 {
-    struct ovsdb_schema *schema = NULL;
+    struct shash *schemas = NULL;
     struct ovsdb_log *log = NULL;
     struct ovsdb_error *error;
     struct json *json = NULL;
 
-    ovs_assert(logp || schemap);
+    ovs_assert(logp || schemasp);
 
     error = ovsdb_log_open(file_name, open_mode, -1, &log);
     if (error) {
@@ -142,8 +162,8 @@ ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
         goto error;
     }
 
-    if (schemap) {
-        error = ovsdb_schema_from_json(json, &schema);
+    if (schemasp) {
+        error = ovsdb_schemas_from_json(json, &schemas);
         if (error) {
             error = ovsdb_wrap_error(error,
                                      "failed to parse \"%s\" as ovsdb schema",
@@ -158,8 +178,8 @@ ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
     } else {
         ovsdb_log_close(log);
     }
-    if (schemap) {
-        *schemap = schema;
+    if (schemasp) {
+        *schemasp = schemas;
     }
     return NULL;
 
@@ -169,21 +189,22 @@ error:
     if (logp) {
         *logp = NULL;
     }
-    if (schemap) {
-        *schemap = NULL;
+    if (schemasp) {
+        *schemasp = NULL;
     }
     return error;
 }
 
 static struct ovsdb_error *
 ovsdb_file_open__(const char *file_name,
-                  const struct ovsdb_schema *alternate_schema,
+                  const struct shash *alternate_schemas,
                   bool read_only, struct ovsdb **dbp,
                   struct ovsdb_file **filep)
 {
     enum ovsdb_log_open_mode open_mode;
     unsigned int n_transactions;
-    struct ovsdb_schema *schema = NULL;
+    struct shash *schemas = NULL;
+    struct ovsdb_schema *joined;
     struct ovsdb_error *error;
     struct ovsdb_log *log;
     struct json *json;
@@ -194,19 +215,27 @@ ovsdb_file_open__(const char *file_name,
 
     open_mode = read_only ? OVSDB_LOG_READ_ONLY : OVSDB_LOG_READ_WRITE;
     error = ovsdb_file_open_log(file_name, open_mode, &log,
-                                alternate_schema ? NULL : &schema);
+                                alternate_schemas ? NULL : &schemas);
     if (error) {
         goto error;
     }
 
-    db = ovsdb_create(schema ? schema : ovsdb_schema_clone(alternate_schema),
-                      NULL);
+    if (!schemas) {
+        schemas = ovsdb_schemas_clone(alternate_schemas);
+    }
+
+    error = ovsdb_schemas_join(schemas, &joined);
+    if (error) {
+            goto error;
+    }
+
+    db = ovsdb_create(joined, schemas);
 
     n_transactions = 0;
     while ((error = ovsdb_log_read(log, &json)) == NULL && json) {
         struct ovsdb_txn *txn;
 
-        error = ovsdb_file_txn_from_json(db, json, alternate_schema != NULL,
+        error = ovsdb_file_txn_from_json(db, json, alternate_schemas != NULL,
                                          &txn);
         json_destroy(json);
         if (error) {
@@ -255,6 +284,9 @@ error:
         *filep = NULL;
     }
     ovsdb_destroy(db);
+    if (schemas) {
+        ovsdb_schemas_destroy(schemas);
+    }
     ovsdb_log_close(log);
     return error;
 }
@@ -433,7 +465,11 @@ ovsdb_file_save_copy__(const char *file_name, int locking,
     }
 
     /* Write schema. */
-    json = ovsdb_schema_to_json(db->schema);
+    if (db->schemas) {
+        json = ovsdb_schemas_to_json(db->schemas);
+    } else {
+        json = ovsdb_schema_to_json(db->schema);
+    }
     error = ovsdb_log_write(log, json);
     json_destroy(json);
     if (error) {
@@ -480,16 +516,38 @@ ovsdb_file_save_copy(const char *file_name, int locking,
     return ovsdb_file_save_copy__(file_name, locking, comment, db, NULL);
 }
 
-/* Opens database 'file_name', reads its schema, and closes it.  On success,
- * stores the schema into '*schemap' and returns NULL; the caller then owns the
- * schema.  On failure, returns an ovsdb_error (which the caller must destroy)
- * and sets '*dbp' to NULL. */
+/* Opens database 'file_name', reads its schemas, and closes it.  On success,
+ * stores the schemas into '*schemasp' and returns NULL; the caller then
+ * owns the schemas.  On failure, returns an ovsdb_error (which the caller
+ * must destroy) and sets '*dbp' to NULL. */
+struct ovsdb_error *
+ovsdb_file_read_schemas(const char *file_name, struct shash **schemasp)
+{
+    ovs_assert(schemasp != NULL);
+    return ovsdb_file_open_log(file_name, OVSDB_LOG_READ_ONLY, NULL, schemasp);
+}
+
 struct ovsdb_error *
 ovsdb_file_read_schema(const char *file_name, struct ovsdb_schema **schemap)
 {
+    struct shash *schemas = NULL;
+    struct ovsdb_schema *schema = NULL;
+    struct ovsdb_error *err;
+
     ovs_assert(schemap != NULL);
-    return ovsdb_file_open_log(file_name, OVSDB_LOG_READ_ONLY, NULL, schemap);
+    err = ovsdb_file_read_schemas(file_name, &schemas);
+    if (err) {
+        goto error;
+    }
+
+    err = ovsdb_schemas_join(schemas, &schema);
+    ovsdb_schemas_destroy(schemas);
+
+error:
+    *schemap = schema;
+    return err;
 }
+
 
 /* Replica implementation. */
 

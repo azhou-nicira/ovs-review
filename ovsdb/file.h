@@ -19,6 +19,7 @@
 #include <stdbool.h>
 #include "compiler.h"
 #include "log.h"
+#include "shash.h"
 
 struct ovsdb;
 struct ovsdb_file;
@@ -33,6 +34,11 @@ struct ovsdb_error *ovsdb_file_open_as_schema(const char *file_name,
                                               struct ovsdb **)
     OVS_WARN_UNUSED_RESULT;
 
+struct ovsdb_error *ovsdb_file_open_as_schemas(const char *file_name,
+                                               const struct shash *,
+                                               struct ovsdb **)
+    OVS_WARN_UNUSED_RESULT;
+
 struct ovsdb_error *ovsdb_file_save_copy(const char *file_name, int locking,
                                          const char *comment,
                                          const struct ovsdb *)
@@ -42,6 +48,10 @@ struct ovsdb_error *ovsdb_file_compact(struct ovsdb_file *);
 
 struct ovsdb_error *ovsdb_file_read_schema(const char *file_name,
                                            struct ovsdb_schema **)
+    OVS_WARN_UNUSED_RESULT;
+
+struct ovsdb_error *ovsdb_file_read_schemas(const char *file_name,
+                                           struct shash **)
     OVS_WARN_UNUSED_RESULT;
 
 #endif /* ovsdb/file.h */
