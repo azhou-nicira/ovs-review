@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2015 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -92,6 +92,16 @@ lookup_executor(const char *name)
     return NULL;
 }
 
+static bool
+check_schema_name_(const struct ovsdb *db, const char *schema_name)
+{
+    if (db->schemas) {
+        return shash_find(db->schemas, schema_name);
+    }
+
+    return !strcmp(db->schema->name, schema_name);
+}
+
 struct json *
 ovsdb_execute(struct ovsdb *db, const struct ovsdb_session *session,
               const struct json *params,
@@ -106,7 +116,7 @@ ovsdb_execute(struct ovsdb *db, const struct ovsdb_session *session,
     if (params->type != JSON_ARRAY
         || !params->u.array.n
         || params->u.array.elems[0]->type != JSON_STRING
-        || strcmp(params->u.array.elems[0]->u.string, db->schema->name)) {
+        || !check_schema_name_(db, params->u.array.elems[0]->u.string)) {
         if (params->type != JSON_ARRAY) {
             error = ovsdb_syntax_error(params, NULL, "array expected");
         } else {

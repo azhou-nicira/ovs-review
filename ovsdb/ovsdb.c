@@ -77,11 +77,25 @@ ovsdb_schema_destroy(struct ovsdb_schema *schema)
 
 /* Join two schemas into a single schema, by adding missing tables from 'src'
  * to 'dst'. In case 'src' and 'dst' both has the same table, the joined 'dst' table
- * will contain the columns from both 'src' and 'dst' tables.  */
+ * will contain the columns from both 'src' and 'dst' tables. 
+ * 
+ * The joined schema name will be the concatenation of each schema's name,
+ * sperated by a comma and a space.  */
 static struct ovsdb_error *
 ovsdb_schema_join(struct ovsdb_schema *dst, const struct ovsdb_schema *src)
 {
     struct shash_node *snode;
+    struct ds ds;
+
+    /* Combine schema names into a comma seperated string.  */
+    ds_init(&ds);
+
+    /* XXX How should we generate the name for the joined schema? */
+    /* For now, Name starts with 'O' will be taken over the name
+     * without it */
+    ds_put_format(&ds, "%s", (*dst->name == 'O') ? dst->name : src->name);
+    free(dst->name);
+    dst->name = ds_steal_cstr(&ds);
 
     SHASH_FOR_EACH (snode, &src->tables) {
         const struct ovsdb_table_schema *sts = snode->data;
