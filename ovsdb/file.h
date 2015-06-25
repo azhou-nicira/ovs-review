@@ -29,11 +29,6 @@ struct ovsdb_error *ovsdb_file_open(const char *file_name, bool read_only,
                                     struct ovsdb **, struct ovsdb_file **)
     OVS_WARN_UNUSED_RESULT;
 
-struct ovsdb_error *ovsdb_file_open_as_schema(const char *file_name,
-                                              const struct ovsdb_schema *,
-                                              struct ovsdb **)
-    OVS_WARN_UNUSED_RESULT;
-
 struct ovsdb_error *ovsdb_file_open_as_schemas(const char *file_name,
                                                const struct shash *,
                                                struct ovsdb **)
@@ -45,10 +40,6 @@ struct ovsdb_error *ovsdb_file_save_copy(const char *file_name, int locking,
     OVS_WARN_UNUSED_RESULT;
 
 struct ovsdb_error *ovsdb_file_compact(struct ovsdb_file *);
-
-struct ovsdb_error *ovsdb_file_read_schema(const char *file_name,
-                                           struct ovsdb_schema **)
-    OVS_WARN_UNUSED_RESULT;
 
 struct ovsdb_error *ovsdb_file_read_schemas(const char *file_name,
                                            struct shash **)

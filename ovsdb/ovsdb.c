@@ -28,7 +28,7 @@
 #include "table.h"
 #include "transaction.h"
 
-struct ovsdb_schema *
+static struct ovsdb_schema *
 ovsdb_schema_create(const char *name, const char *version, const char *cksum)
 {
     struct ovsdb_schema *schema;
@@ -42,7 +42,7 @@ ovsdb_schema_create(const char *name, const char *version, const char *cksum)
     return schema;
 }
 
-struct ovsdb_schema *
+static struct ovsdb_schema *
 ovsdb_schema_clone(const struct ovsdb_schema *old)
 {
     struct ovsdb_schema *new;
@@ -119,7 +119,7 @@ ovsdb_schema_join(struct ovsdb_schema *dst, const struct ovsdb_schema *src)
     return NULL;
 }
 
-struct ovsdb_error *
+static struct ovsdb_error *
 ovsdb_schema_from_file(const char *file_name, struct ovsdb_schema **schemap)
 {
     struct ovsdb_schema *schema;

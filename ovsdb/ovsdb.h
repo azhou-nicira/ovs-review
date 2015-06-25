@@ -37,15 +37,8 @@ struct ovsdb_schema {
     struct shash tables;        /* Contains "struct ovsdb_table_schema *"s. */
 };
 
-struct ovsdb_schema *ovsdb_schema_create(const char *name,
-                                         const char *version,
-                                         const char *cksum);
-struct ovsdb_schema *ovsdb_schema_clone(const struct ovsdb_schema *);
 void ovsdb_schema_destroy(struct ovsdb_schema *);
 
-struct ovsdb_error *ovsdb_schema_from_file(const char *file_name,
-                                           struct ovsdb_schema **)
-    OVS_WARN_UNUSED_RESULT;
 struct ovsdb_error *ovsdb_schema_from_json(struct json *,
                                            struct ovsdb_schema **)
     OVS_WARN_UNUSED_RESULT;

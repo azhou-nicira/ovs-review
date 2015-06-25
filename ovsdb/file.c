@@ -117,26 +117,6 @@ ovsdb_file_open_as_schemas(const char *file_name,
     return ovsdb_file_open__(file_name, schemas, true, dbp, NULL);
 }
 
-struct ovsdb_error *
-ovsdb_file_open_as_schema(const char *file_name,
-                          const struct ovsdb_schema *schema,
-                          struct ovsdb **dbp)
-{
-    struct shash *schemas;
-    struct ovsdb_error *err;
-
-    schemas = xmalloc(sizeof *schemas);
-    shash_init(schemas);
-    shash_add(schemas, schema->name, ovsdb_schema_clone(schema));
-
-    err = ovsdb_file_open__(file_name, schemas, true, dbp, NULL);
-    if (err) {
-        ovsdb_schemas_destroy(schemas);
-    }
-
-    return err;
-}
-
 static struct ovsdb_error *
 ovsdb_file_open_log(const char *file_name, enum ovsdb_log_open_mode open_mode,
                     struct ovsdb_log **logp, struct shash **schemasp)
@@ -525,27 +505,6 @@ ovsdb_file_read_schemas(const char *file_name, struct shash **schemasp)
 {
     ovs_assert(schemasp != NULL);
     return ovsdb_file_open_log(file_name, OVSDB_LOG_READ_ONLY, NULL, schemasp);
-}
-
-struct ovsdb_error *
-ovsdb_file_read_schema(const char *file_name, struct ovsdb_schema **schemap)
-{
-    struct shash *schemas = NULL;
-    struct ovsdb_schema *schema = NULL;
-    struct ovsdb_error *err;
-
-    ovs_assert(schemap != NULL);
-    err = ovsdb_file_read_schemas(file_name, &schemas);
-    if (err) {
-        goto error;
-    }
-
-    err = ovsdb_schemas_join(schemas, &schema);
-    ovsdb_schemas_destroy(schemas);
-
-error:
-    *schemap = schema;
-    return err;
 }
 
 
