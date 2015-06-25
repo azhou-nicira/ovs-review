@@ -20,6 +20,7 @@
 #include "hmap.h"
 #include "list.h"
 #include "shash.h"
+#include "sset.h"
 
 struct json;
 struct ovsdb_log;
@@ -50,6 +51,38 @@ struct ovsdb_error *ovsdb_schema_from_json(struct json *,
     OVS_WARN_UNUSED_RESULT;
 struct json *ovsdb_schema_to_json(const struct ovsdb_schema *);
 
+/* Multiple schemas. */
+struct shash *ovsdb_schemas_clone(const struct shash *schemas);
+struct ovsdb_error *ovsdb_schemas_from_files(const struct sset *files,
+                                             struct shash** )
+    OVS_WARN_UNUSED_RESULT;
+void ovsdb_schemas_destroy(struct shash *schemas);
+struct json *ovsdb_schemas_to_json(const struct shash *schemas)
+    OVS_WARN_UNUSED_RESULT;
+struct ovsdb_error *ovsdb_schemas_from_json(struct json *json,
+                                             struct shash **)
+    OVS_WARN_UNUSED_RESULT;
+
+static inline bool
+ovsdb_schemas_is_empty(const struct shash *schemas)
+{
+    return (!shash_count(schemas));
+}
+
+static inline bool
+ovsdb_schemas_is_null_or_empty(const struct shash *schemas)
+{
+    return (!schemas || ovsdb_schemas_is_empty(schemas));
+}
+
+
+static inline bool
+ovsdb_schemas_is_non_empty(const struct shash *schemas)
+{
+    return (schemas && !ovsdb_schemas_is_empty(schemas));
+}
+
+
 bool ovsdb_schema_equal(const struct ovsdb_schema *,
                         const struct ovsdb_schema *);
 
