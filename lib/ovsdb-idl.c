@@ -85,7 +85,7 @@ struct ovsdb_idl {
     const struct ovsdb_idl_class *class;
     struct jsonrpc_session *session;
     struct shash table_by_name;
-    struct ovsdb_idl_table *tables; /* Contains "struct ovsdb_idl_table *"s.*/
+    struct shash tables; /* Contains "struct ovsdb_idl_table *"s.*/
     unsigned int change_seqno;
     bool verify_write_only;
 
@@ -209,13 +209,14 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
     idl->class = class;
     idl->session = jsonrpc_session_open(remote, retry);
     shash_init(&idl->table_by_name);
-    idl->tables = xmalloc(class->n_tables * sizeof *idl->tables);
+    shash_init(&idl->tables);
     for (i = 0; i < class->n_tables; i++) {
         const struct ovsdb_idl_table_class *tc = &class->tables[i];
-        struct ovsdb_idl_table *table = &idl->tables[i];
+        struct ovsdb_idl_table *table = xzalloc(sizeof *table);
         size_t j;
 
         shash_add_assert(&idl->table_by_name, tc->name, table);
+        shash_add_assert(&idl->tables, tc->name, table);
         table->class = tc;
         table->modes = xmalloc(tc->n_columns);
         memset(table->modes, default_mode, tc->n_columns);
@@ -243,20 +244,20 @@ void
 ovsdb_idl_destroy(struct ovsdb_idl *idl)
 {
     if (idl) {
-        size_t i;
+        struct shash_node *node, *next;
 
         ovs_assert(!idl->txn);
         ovsdb_idl_clear(idl);
         jsonrpc_session_close(idl->session);
 
-        for (i = 0; i < idl->class->n_tables; i++) {
-            struct ovsdb_idl_table *table = &idl->tables[i];
+        SHASH_FOR_EACH_SAFE(node, next, &idl->tables) {
+            struct ovsdb_idl_table *table = node->data;
             shash_destroy(&table->columns);
             hmap_destroy(&table->rows);
             free(table->modes);
         }
         shash_destroy(&idl->table_by_name);
-        free(idl->tables);
+        shash_destroy(&idl->tables);
         json_destroy(idl->request_id);
         free(idl->lock_name);
         json_destroy(idl->lock_request_id);
@@ -269,10 +270,10 @@ static void
 ovsdb_idl_clear(struct ovsdb_idl *idl)
 {
     bool changed = false;
-    size_t i;
+    struct shash_node *node;
 
-    for (i = 0; i < idl->class->n_tables; i++) {
-        struct ovsdb_idl_table *table = &idl->tables[i];
+    SHASH_FOR_EACH(node, &idl->tables) {
+        struct ovsdb_idl_table *table = node->data;
         struct ovsdb_idl_row *row, *next_row;
 
         if (hmap_is_empty(&table->rows)) {
@@ -488,12 +489,12 @@ static unsigned char *
 ovsdb_idl_get_mode(struct ovsdb_idl *idl,
                    const struct ovsdb_idl_column *column)
 {
-    size_t i;
+    struct shash_node *node;
 
     ovs_assert(!idl->change_seqno);
 
-    for (i = 0; i < idl->class->n_tables; i++) {
-        const struct ovsdb_idl_table *table = &idl->tables[i];
+    SHASH_FOR_EACH(node, &idl->tables) {
+        const struct ovsdb_idl_table *table = node->data;
         const struct ovsdb_idl_table_class *tc = table->class;
 
         if (column >= tc->columns && column < &tc->columns[tc->n_columns]) {
@@ -554,18 +555,11 @@ void
 ovsdb_idl_add_table(struct ovsdb_idl *idl,
                     const struct ovsdb_idl_table_class *tc)
 {
-    size_t i;
+    struct ovsdb_idl_table *table;
 
-    for (i = 0; i < idl->class->n_tables; i++) {
-        struct ovsdb_idl_table *table = &idl->tables[i];
-
-        if (table->class == tc) {
-            table->need_table = true;
-            return;
-        }
-    }
-
-    OVS_NOT_REACHED();
+    table = shash_find_data(&idl->tables, tc->name);
+    ovs_assert(table);
+    table->need_table = true;
 }
 
 /* Turns off OVSDB_IDL_ALERT for 'column' in 'idl'.
@@ -696,11 +690,11 @@ ovsdb_idl_send_monitor_request(struct ovsdb_idl *idl,
     struct shash *schema = parse_schema(schema_json);
     struct json *monitor_requests;
     struct jsonrpc_msg *msg;
-    size_t i;
+    struct shash_node *node;
 
     monitor_requests = json_object_create();
-    for (i = 0; i < idl->class->n_tables; i++) {
-        const struct ovsdb_idl_table *table = &idl->tables[i];
+    SHASH_FOR_EACH(node, &idl->tables) {
+        const struct ovsdb_idl_table *table = node->data;
         const struct ovsdb_idl_table_class *tc = table->class;
         struct json *monitor_request, *columns;
         const struct sset *table_schema;
@@ -1208,7 +1202,7 @@ static struct ovsdb_idl_table *
 ovsdb_idl_table_from_class(const struct ovsdb_idl *idl,
                            const struct ovsdb_idl_table_class *table_class)
 {
-    return &idl->tables[table_class - idl->class->tables];
+    return shash_find_data(&idl->tables, table_class->name);
 }
 
 /* Called by ovsdb-idlc generated code. */
