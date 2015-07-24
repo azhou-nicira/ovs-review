@@ -84,7 +84,6 @@ enum ovsdb_idl_state {
 struct ovsdb_idl {
     const struct ovsdb_idl_class *class;
     struct jsonrpc_session *session;
-    struct shash table_by_name;
     struct shash tables; /* Contains "struct ovsdb_idl_table *"s.*/
     unsigned int change_seqno;
     bool verify_write_only;
@@ -208,14 +207,12 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
     idl = xzalloc(sizeof *idl);
     idl->class = class;
     idl->session = jsonrpc_session_open(remote, retry);
-    shash_init(&idl->table_by_name);
     shash_init(&idl->tables);
     for (i = 0; i < class->n_tables; i++) {
         const struct ovsdb_idl_table_class *tc = &class->tables[i];
         struct ovsdb_idl_table *table = xzalloc(sizeof *table);
         size_t j;
 
-        shash_add_assert(&idl->table_by_name, tc->name, table);
         shash_add_assert(&idl->tables, tc->name, table);
         table->class = tc;
         table->modes = xmalloc(tc->n_columns);
@@ -256,7 +253,6 @@ ovsdb_idl_destroy(struct ovsdb_idl *idl)
             hmap_destroy(&table->rows);
             free(table->modes);
         }
-        shash_destroy(&idl->table_by_name);
         shash_destroy(&idl->tables);
         json_destroy(idl->request_id);
         free(idl->lock_name);
@@ -511,7 +507,7 @@ add_ref_table(struct ovsdb_idl *idl, const struct ovsdb_base_type *base)
     if (base->type == OVSDB_TYPE_UUID && base->u.uuid.refTableName) {
         struct ovsdb_idl_table *table;
 
-        table = shash_find_data(&idl->table_by_name,
+        table = shash_find_data(&idl->tables,
                                 base->u.uuid.refTableName);
         if (table) {
             table->need_table = true;
@@ -777,7 +773,7 @@ ovsdb_idl_parse_update__(struct ovsdb_idl *idl,
         const struct shash_node *table_node;
         struct ovsdb_idl_table *table;
 
-        table = shash_find_data(&idl->table_by_name, tables_node->name);
+        table = shash_find_data(&idl->tables, tables_node->name);
         if (!table) {
             return ovsdb_syntax_error(
                 table_updates, NULL,
