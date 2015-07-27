@@ -87,6 +87,7 @@ struct ovsdb_idl {
     struct shash tables; /* Contains "struct ovsdb_idl_table *"s.*/
     unsigned int change_seqno;
     bool verify_write_only;
+    uint8_t default_mode;
 
     /* Session state. */
     unsigned int state_seqno;
@@ -207,6 +208,7 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
     idl = xzalloc(sizeof *idl);
     idl->class = class;
     idl->session = jsonrpc_session_open(remote, retry);
+    idl->default_mode = default_mode;
     shash_init(&idl->tables);
     for (i = 0; i < class->n_tables; i++) {
         const struct ovsdb_idl_table_class *tc = &class->tables[i];
