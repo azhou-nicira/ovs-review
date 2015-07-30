@@ -174,6 +174,37 @@ static void ovsdb_idl_parse_lock_reply(struct ovsdb_idl *,
 static void ovsdb_idl_parse_lock_notify(struct ovsdb_idl *,
                                         const struct json *params,
                                         bool new_has_lock);
+static void
+ovsdb_idl_create_table(struct ovsdb_idl *idl,
+                       const struct ovsdb_idl_table_class *tc,
+                       bool need_table)
+{
+    struct ovsdb_idl_table *table = xzalloc(sizeof *table);
+    size_t j;
+
+    shash_add_assert(&idl->tables, tc->name, table);
+    table->class = tc;
+    table->modes = xmalloc(tc->n_columns);
+    memset(table->modes, idl->default_mode, tc->n_columns);
+    table->need_table = need_table;
+    shash_init(&table->columns);
+    for (j = 0; j < tc->n_columns; j++) {
+        const struct ovsdb_idl_column *column = &tc->columns[j];
+
+        shash_add_assert(&table->columns, column->name, column);
+    }
+    hmap_init(&table->rows);
+    table->idl = idl;
+}
+
+static void
+ovsdb_idl_destroy_table(struct ovsdb_idl_table *table)
+{
+    shash_destroy(&table->columns);
+    hmap_destroy(&table->rows);
+    free(table->modes);
+    free(table);
+}
 
 /* Creates and returns a connection to database 'remote', which should be in a
  * form acceptable to jsonrpc_session_open().  The connection will maintain an
@@ -212,22 +243,7 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
     shash_init(&idl->tables);
     for (i = 0; i < class->n_tables; i++) {
         const struct ovsdb_idl_table_class *tc = &class->tables[i];
-        struct ovsdb_idl_table *table = xzalloc(sizeof *table);
-        size_t j;
-
-        shash_add_assert(&idl->tables, tc->name, table);
-        table->class = tc;
-        table->modes = xmalloc(tc->n_columns);
-        memset(table->modes, default_mode, tc->n_columns);
-        table->need_table = false;
-        shash_init(&table->columns);
-        for (j = 0; j < tc->n_columns; j++) {
-            const struct ovsdb_idl_column *column = &tc->columns[j];
-
-            shash_add_assert(&table->columns, column->name, column);
-        }
-        hmap_init(&table->rows);
-        table->idl = idl;
+        ovsdb_idl_create_table(idl, tc, false);
     }
 
     idl->state_seqno = UINT_MAX;
@@ -251,9 +267,7 @@ ovsdb_idl_destroy(struct ovsdb_idl *idl)
 
         SHASH_FOR_EACH_SAFE(node, next, &idl->tables) {
             struct ovsdb_idl_table *table = node->data;
-            shash_destroy(&table->columns);
-            hmap_destroy(&table->rows);
-            free(table->modes);
+            ovsdb_idl_destroy_table(table);
         }
         shash_destroy(&idl->tables);
         json_destroy(idl->request_id);
