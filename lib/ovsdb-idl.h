@@ -53,6 +53,8 @@ struct ovsdb_idl *ovsdb_idl_create(const char *remote,
                                    const struct ovsdb_idl_class_ops *ops,
                                    bool retry);
 void ovsdb_idl_destroy(struct ovsdb_idl *);
+void ovsdb_idl_change_class(struct ovsdb_idl *,
+                            const struct ovsdb_idl_class *);
 
 void ovsdb_idl_run(struct ovsdb_idl *);
 void ovsdb_idl_wait(struct ovsdb_idl *);

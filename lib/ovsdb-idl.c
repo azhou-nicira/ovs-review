@@ -181,21 +181,24 @@ static void ovsdb_idl_parse_lock_notify(struct ovsdb_idl *,
 static void
 ovsdb_idl_create_table(struct ovsdb_idl *idl,
                        const struct ovsdb_idl_table_class *tc,
-                       bool need_table)
+                       const struct shash *modes, bool need_table)
 {
     struct ovsdb_idl_table *table = xzalloc(sizeof *table);
     size_t j;
 
     shash_add_assert(&idl->tables, tc->name, table);
     table->class = tc;
-    table->modes = xmalloc(tc->n_columns);
-    memset(table->modes, idl->default_mode, tc->n_columns);
+    table->modes= xmalloc(tc->n_columns);
     table->need_table = need_table;
     shash_init(&table->columns);
     for (j = 0; j < tc->n_columns; j++) {
         const struct ovsdb_idl_column *column = &tc->columns[j];
+        unsigned char *mode = &table->modes[j];;
+        unsigned char *last_mode;
 
         shash_add_assert(&table->columns, column->name, column);
+        last_mode = modes ? shash_find_data(modes, column->name) : NULL;
+        *mode = last_mode ? *last_mode : idl->default_mode;
     }
     hmap_init(&table->rows);
     table->idl = idl;
@@ -246,14 +249,14 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
                     : 0);
 
     idl = xzalloc(sizeof *idl);
-    idl->class = class;
+    idl->class = idl->default_class = class;
     idl->session = jsonrpc_session_open(remote, retry);
     idl->default_mode = default_mode;
     idl->idl_class_ops = ops;
     shash_init(&idl->tables);
     for (i = 0; i < class->n_tables; i++) {
         const struct ovsdb_idl_table_class *tc = &class->tables[i];
-        ovsdb_idl_create_table(idl, tc, false);
+        ovsdb_idl_create_table(idl, tc, NULL, false);
     }
 
     idl->state_seqno = UINT_MAX;
@@ -291,6 +294,17 @@ ovsdb_idl_destroy(struct ovsdb_idl *idl)
     }
 }
 
+static size_t
+ovsdb_idl_column_index(const struct ovsdb_idl_table *table,
+                       const struct ovsdb_idl_column *column)
+{
+    const struct ovsdb_idl_table_class *tc = table->class;
+
+    column = shash_find_data(&table->columns, column->name);
+    ovs_assert(column);
+    return column - tc->columns;
+}
+
 static void
 ovsdb_idl_clear(struct ovsdb_idl *idl)
 {
@@ -324,6 +338,67 @@ ovsdb_idl_clear(struct ovsdb_idl *idl)
 
     if (changed) {
         idl->change_seqno++;
+    }
+}
+
+static struct shash *
+create_modes(const struct ovsdb_idl_table *table) {
+    struct shash *modes = xmalloc(sizeof *modes);
+    struct shash_node *node;
+
+    shash_init(modes);
+
+    SHASH_FOR_EACH (node, &table->columns) {
+        struct ovsdb_idl_column *column = node->data;
+        size_t idx = column - table->class->columns;
+        shash_add(modes, column->name, &table->modes[idx]);
+    }
+
+    return modes;
+}
+
+void
+ovsdb_idl_change_class(struct ovsdb_idl* idl,
+                       const struct ovsdb_idl_class *new_class)
+{
+    struct shash old_tables = SHASH_INITIALIZER(&old_tables);
+    const struct ovsdb_idl_class *old_class;
+    struct shash_node *node;
+    size_t i;
+
+    ovsdb_idl_clear(idl);
+
+    /* Create new tables according to the new class.
+     * The 'need_table' and 'modes' attributes will be preserved
+     * across class update.  */
+    shash_swap(&old_tables, &idl->tables);
+    old_class = idl->class;
+    idl->class = new_class;
+
+    /* Create idl states according to the new class. */
+    for (i = 0; i < new_class->n_tables; i++) {
+        const struct ovsdb_idl_table_class *tc = &new_class->tables[i];
+        struct ovsdb_idl_table *old_table = shash_find_data(&old_tables,
+                                                            tc->name);
+        struct shash *modes = old_table ? create_modes(old_table) : NULL;
+        bool need_table = old_table ? old_table->need_table : false;
+
+        ovsdb_idl_create_table(idl, tc, modes, need_table);
+        if (modes) {
+            shash_destroy(modes);
+        }
+    }
+
+    /* Destroy old tables. */
+    SHASH_FOR_EACH (node, &old_tables) {
+        struct ovsdb_idl_table *table = node->data;
+        ovsdb_idl_destroy_table(table);
+    }
+    shash_destroy(&old_tables);
+
+    /* Destroy old class if necessary. */
+    if (old_class != idl->default_class) {
+        idl_class_destroy(idl->idl_class_ops, old_class);
     }
 }
 
@@ -375,6 +450,13 @@ ovsdb_idl_run(struct ovsdb_idl *idl)
                 /* Reply to our "get_schema" request. */
                 json_destroy(idl->request_id);
                 idl->request_id = NULL;
+                if (idl->idl_class_ops) {
+                    struct ovsdb_idl_class *new_class;
+                    new_class = idl_class_create(idl->idl_class_ops,
+                                                 msg->result,
+                                                 idl->default_class);
+                    ovsdb_idl_change_class(idl, new_class);
+                };
                 ovsdb_idl_send_monitor_request(idl, msg->result);
                 idl->state = IDL_S_MONITOR_REQUESTED;
                 break;
@@ -510,20 +592,60 @@ ovsdb_idl_get_last_error(const struct ovsdb_idl *idl)
     return jsonrpc_session_get_last_error(idl->session);
 }
 
+
+static unsigned char *
+ovsdb_idl_get_mode_table(const struct ovsdb_idl_table *table,
+                         const struct ovsdb_idl_column *column)
+{
+    size_t column_idx;
+
+    column_idx = ovsdb_idl_column_index(table, column);
+    return &table->modes[column_idx];
+}
+
+static unsigned char *
+ovsdb_idl_get_mode_tc(struct ovsdb_idl *idl,
+                    const struct ovsdb_idl_table_class *tc,
+                    const struct ovsdb_idl_column *column)
+{
+    const struct ovsdb_idl_table *table;
+
+    table = shash_find_data(&idl->tables, tc->name);
+    return ovsdb_idl_get_mode_table(table, column);
+}
+
 static unsigned char *
 ovsdb_idl_get_mode(struct ovsdb_idl *idl,
                    const struct ovsdb_idl_column *column)
 {
+    size_t i;
     struct shash_node *node;
 
     ovs_assert(!idl->change_seqno);
 
-    SHASH_FOR_EACH(node, &idl->tables) {
+    /* The 'column' is either part of the default idl class,
+     * or part of the newly created idl class. In either case,
+     * Get the its mode within current idl table.  */
+
+    if (idl->default_class) {
+        const struct ovsdb_idl_class *dfc = idl->default_class;
+
+        for (i = 0; i < dfc->n_tables; i++) {
+            const struct ovsdb_idl_table_class *tc = &dfc->tables[i];
+
+            if (column >= tc->columns
+                && column < &tc->columns[tc->n_columns]) {
+                return ovsdb_idl_get_mode_tc(idl, tc, column);
+            }
+        }
+    }
+
+    SHASH_FOR_EACH (node, &idl->tables) {
         const struct ovsdb_idl_table *table = node->data;
         const struct ovsdb_idl_table_class *tc = table->class;
 
         if (column >= tc->columns && column < &tc->columns[tc->n_columns]) {
-            return &table->modes[column - tc->columns];
+            return ovsdb_idl_get_mode_table(table, column);
         }
     }
 
@@ -956,8 +1078,11 @@ ovsdb_idl_row_update(struct ovsdb_idl_row *row, const struct json *row_json)
 
         error = ovsdb_datum_from_json(&datum, &column->type, node->data, NULL);
         if (!error) {
-            unsigned int column_idx = column - table->class->columns;
-            struct ovsdb_datum *old = &row->old[column_idx];
+            size_t column_idx;
+            struct ovsdb_datum *old;
+
+            column_idx = ovsdb_idl_column_index(table, column);
+            old = &row->old[column_idx];
 
             if (!ovsdb_datum_equals(old, &datum, &column->type)) {
                 ovsdb_datum_swap(old, &datum);
@@ -1339,16 +1464,10 @@ const struct ovsdb_datum *
 ovsdb_idl_read(const struct ovsdb_idl_row *row,
                const struct ovsdb_idl_column *column)
 {
-    const struct ovsdb_idl_table_class *class;
-    size_t column_idx;
+    size_t column_idx = ovsdb_idl_column_index(row->table, column);
 
     ovs_assert(!ovsdb_idl_row_is_synthetic(row));
-
-    class = row->table->class;
-    column_idx = column - class->columns;
-
     ovs_assert(row->new != NULL);
-    ovs_assert(column_idx < class->n_columns);
 
     if (row->written && bitmap_is_set(row->written, column_idx)) {
         return &row->new[column_idx];
@@ -2078,11 +2197,10 @@ ovsdb_idl_txn_write__(const struct ovsdb_idl_row *row_,
     }
 
     class = row->table->class;
-    column_idx = column - class->columns;
+    column_idx = ovsdb_idl_column_index(row->table, column);
     write_only = row->table->modes[column_idx] == OVSDB_IDL_MONITOR;
 
     ovs_assert(row->new != NULL);
-    ovs_assert(column_idx < class->n_columns);
     ovs_assert(row->old == NULL ||
                row->table->modes[column_idx] & OVSDB_IDL_MONITOR);
 
@@ -2196,7 +2314,7 @@ ovsdb_idl_txn_verify(const struct ovsdb_idl_row *row_,
     }
 
     class = row->table->class;
-    column_idx = column - class->columns;
+    column_idx = ovsdb_idl_column_index(row->table, column);
 
     ovs_assert(row->new != NULL);
     ovs_assert(row->old == NULL ||
