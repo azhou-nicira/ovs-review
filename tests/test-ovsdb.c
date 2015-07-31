@@ -1885,7 +1885,7 @@ do_idl(struct ovs_cmdl_context *ctx)
 
     idltest_init();
 
-    idl = ovsdb_idl_create(ctx->argv[1], &idltest_idl_class, true, true);
+    idl = ovsdb_idl_create(ctx->argv[1], &idltest_idl_class, true, NULL, true);
     if (ctx->argc > 2) {
         struct stream *stream;
 

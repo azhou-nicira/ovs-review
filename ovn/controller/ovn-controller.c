@@ -243,7 +243,7 @@ main(int argc, char *argv[])
     /* Connect to OVS OVSDB instance.  We do not monitor all tables by
      * default, so modules must register their interest explicitly.  */
     struct idl_loop ovs_idl_loop = IDL_LOOP_INITIALIZER(
-        ovsdb_idl_create(ovs_remote, &ovsrec_idl_class, false, true));
+        ovsdb_idl_create(ovs_remote, &ovsrec_idl_class, false, NULL, true));
     ovsdb_idl_add_table(ovs_idl_loop.idl, &ovsrec_table_open_vswitch);
     ovsdb_idl_add_column(ovs_idl_loop.idl,
                          &ovsrec_open_vswitch_col_external_ids);
@@ -256,7 +256,7 @@ main(int argc, char *argv[])
     /* Connect to OVN SB database. */
     char *ovnsb_remote = get_ovnsb_remote(ovs_idl_loop.idl);
     struct idl_loop ovnsb_idl_loop = IDL_LOOP_INITIALIZER(
-        ovsdb_idl_create(ovnsb_remote, &sbrec_idl_class, true, true));
+        ovsdb_idl_create(ovnsb_remote, &sbrec_idl_class, true, NULL, true));
     get_initial_snapshot(ovnsb_idl_loop.idl);
 
     /* Main loop. */

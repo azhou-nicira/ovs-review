@@ -161,7 +161,7 @@ main(int argc, char *argv[])
     }
 
     /* Initialize IDL. */
-    idl = the_idl = ovsdb_idl_create(db, &ovsrec_idl_class, false, retry);
+    idl = the_idl = ovsdb_idl_create(db, &ovsrec_idl_class, false, NULL, retry);
     run_prerequisites(commands, n_commands, idl);
 
     /* Execute the commands.

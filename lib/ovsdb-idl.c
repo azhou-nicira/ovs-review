@@ -82,12 +82,16 @@ enum ovsdb_idl_state {
 };
 
 struct ovsdb_idl {
-    const struct ovsdb_idl_class *class;
     struct jsonrpc_session *session;
     struct shash tables; /* Contains "struct ovsdb_idl_table *"s.*/
     unsigned int change_seqno;
     bool verify_write_only;
     uint8_t default_mode;
+
+    /* Call back function for creating ovsdb_idl_class from schema. */
+    const struct ovsdb_idl_class_ops *idl_class_ops;
+    const struct ovsdb_idl_class *class;
+    const struct ovsdb_idl_class *default_class;
 
     /* Session state. */
     unsigned int state_seqno;
@@ -223,10 +227,15 @@ ovsdb_idl_destroy_table(struct ovsdb_idl_table *table)
  * If 'monitor_everything_by_default' is false, then no columns or tables will
  * be replicated by default.  ovsdb_idl_add_column() and ovsdb_idl_add_table()
  * must be used to choose some columns or tables to replicate.
+ *
+ * In case 'ops' call backs are supplied, a new IDL class will be built
+ * whenever the schema is retrived from the OVSDB server. IDL run time state
+ * will be rebuilt using the newly constructed IDL class.
  */
 struct ovsdb_idl *
 ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
-                 bool monitor_everything_by_default, bool retry)
+                 bool monitor_everything_by_default,
+                 const struct ovsdb_idl_class_ops *ops, bool retry)
 {
     struct ovsdb_idl *idl;
     uint8_t default_mode;
@@ -240,6 +249,7 @@ ovsdb_idl_create(const char *remote, const struct ovsdb_idl_class *class,
     idl->class = class;
     idl->session = jsonrpc_session_open(remote, retry);
     idl->default_mode = default_mode;
+    idl->idl_class_ops = ops;
     shash_init(&idl->tables);
     for (i = 0; i < class->n_tables; i++) {
         const struct ovsdb_idl_table_class *tc = &class->tables[i];
@@ -274,6 +284,9 @@ ovsdb_idl_destroy(struct ovsdb_idl *idl)
         free(idl->lock_name);
         json_destroy(idl->lock_request_id);
         hmap_destroy(&idl->outstanding_txns);
+        if (idl->class != idl->default_class) {
+            idl_class_destroy(idl->idl_class_ops, idl->class);
+        }
         free(idl);
     }
 }

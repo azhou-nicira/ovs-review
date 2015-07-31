@@ -1076,10 +1076,10 @@ main(int argc, char *argv[])
 
     /* We want to detect all changes to the ovn-nb db. */
     ctx.ovnnb_idl = ovnnb_idl = ovsdb_idl_create(ovnnb_db,
-            &nbrec_idl_class, true, true);
+            &nbrec_idl_class, true, NULL, true);
 
     ctx.ovnsb_idl = ovnsb_idl = ovsdb_idl_create(ovnsb_db,
-            &sbrec_idl_class, false, true);
+            &sbrec_idl_class, false, NULL, true);
 
     ovsdb_idl_add_table(ovnsb_idl, &sbrec_table_logical_flow);
     add_column_noalert(ovnsb_idl, &sbrec_logical_flow_col_logical_datapath);

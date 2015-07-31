@@ -985,7 +985,7 @@ main(int argc, char *argv[])
 
     args = process_escape_args(argv);
 
-    nb_ctx.idl = ovsdb_idl_create(db, &nbrec_idl_class, true, false);
+    nb_ctx.idl = ovsdb_idl_create(db, &nbrec_idl_class, true, NULL, false);
     ctx.pvt = &nb_ctx;
     ctx.argc = argc - optind;
     ctx.argv = argv + optind;

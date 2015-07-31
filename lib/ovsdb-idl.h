@@ -44,11 +44,13 @@ struct ovsdb_datum;
 struct ovsdb_idl_class;
 struct ovsdb_idl_column;
 struct ovsdb_idl_table_class;
+struct ovsdb_idl_class_ops;
 struct uuid;
 
 struct ovsdb_idl *ovsdb_idl_create(const char *remote,
                                    const struct ovsdb_idl_class *,
                                    bool monitor_everything_by_default,
+                                   const struct ovsdb_idl_class_ops *ops,
                                    bool retry);
 void ovsdb_idl_destroy(struct ovsdb_idl *);
 
@@ -222,5 +224,30 @@ const struct ovsdb_idl_row *ovsdb_idl_txn_insert(
     const struct uuid *);
 
 struct ovsdb_idl *ovsdb_idl_txn_get_idl (struct ovsdb_idl_txn *);
+
+struct ovsdb_idl_class_ops {
+    struct ovsdb_idl_class *(*constructor)(const struct json *,
+                                           const struct ovsdb_idl_class *);
+    void (*destructor)(struct ovsdb_idl_class *);
+};
+
+static inline struct ovsdb_idl_class *
+idl_class_create(const struct ovsdb_idl_class_ops *ops,
+                 const struct json *schema_json,
+                 const struct ovsdb_idl_class *default_class)
+{
+    ovs_assert(ops);
+    return (*ops->constructor)(schema_json, default_class);
+}
+
+static inline void
+idl_class_destroy(const struct ovsdb_idl_class_ops *ops,
+                  const struct ovsdb_idl_class *idl_class_)
+{
+    struct ovsdb_idl_class *idl_class = (struct ovsdb_idl_class *)idl_class_;
+
+    ovs_assert(ops);
+    (*ops->destructor)(idl_class);
+}
 
 #endif /* ovsdb-idl.h */
