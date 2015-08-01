@@ -205,7 +205,7 @@ root_set_size(const struct ovsdb_schema *schema)
 }
 
 struct ovsdb_error *
-ovsdb_schema_from_json(struct json *json, struct ovsdb_schema **schemap)
+ovsdb_schema_from_json(const struct json *json, struct ovsdb_schema **schemap)
 {
     struct ovsdb_schema *schema;
     const struct json *name, *tables, *version_json, *cksum;

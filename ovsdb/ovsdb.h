@@ -39,7 +39,7 @@ struct ovsdb_schema {
 
 void ovsdb_schema_destroy(struct ovsdb_schema *);
 
-struct ovsdb_error *ovsdb_schema_from_json(struct json *,
+struct ovsdb_error *ovsdb_schema_from_json(const struct json *,
                                            struct ovsdb_schema **)
     OVS_WARN_UNUSED_RESULT;
 struct json *ovsdb_schema_to_json(const struct ovsdb_schema *);

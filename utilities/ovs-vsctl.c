@@ -37,6 +37,8 @@
 #include "json.h"
 #include "ovsdb-data.h"
 #include "ovsdb-idl.h"
+#include "ovsdb/ovsdb.h"
+#include "ovsdb/ovsdb-idl-class.h"
 #include "poll-loop.h"
 #include "process.h"
 #include "stream.h"
@@ -127,6 +129,26 @@ static struct uuid *neoteric_ifaces;
 static size_t n_neoteric_ifaces;
 static size_t allocated_neoteric_ifaces;
 
+static struct ovsdb_idl_class *
+idl_class_from_json_schema(const struct json *ovsdb_schema,
+                           const struct ovsdb_idl_class *default_class)
+{
+    struct ovsdb_schema *schema;
+    struct ovsdb_idl_class *idl_class = NULL;
+    struct ovsdb_error *error;
+
+    error = ovsdb_schema_from_json(ovsdb_schema, &schema);
+    if (error) {
+        VLOG_WARN("failed to parse ovsdb schema. IDL class can "
+                  "not be created");
+    } else {
+        idl_class = ovsdb_idl_class_create(schema, default_class);
+        ovsdb_schema_destroy(schema);
+    }
+
+    return idl_class;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -161,7 +183,9 @@ main(int argc, char *argv[])
     }
 
     /* Initialize IDL. */
-    idl = the_idl = ovsdb_idl_create(db, &ovsrec_idl_class, false, NULL, retry);
+    struct ovsdb_idl_class_ops ops = {idl_class_from_json_schema,
+                                      ovsdb_idl_class_destroy };
+    idl = the_idl = ovsdb_idl_create(db, &ovsrec_idl_class, false, &ops, retry);
     run_prerequisites(commands, n_commands, idl);
 
     /* Execute the commands.

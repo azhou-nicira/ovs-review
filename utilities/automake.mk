@@ -137,7 +137,7 @@ utilities_ovs_ofctl_LDADD = \
 	lib/libopenvswitch.la
 
 utilities_ovs_vsctl_SOURCES = utilities/ovs-vsctl.c
-utilities_ovs_vsctl_LDADD = lib/libopenvswitch.la
+utilities_ovs_vsctl_LDADD = lib/libopenvswitch.la ovsdb/libovsdb.la
 
 if LINUX
 sbin_PROGRAMS += utilities/ovs-vlan-bug-workaround
