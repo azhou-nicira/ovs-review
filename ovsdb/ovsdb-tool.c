@@ -130,6 +130,7 @@ usage(void)
            "  db-cksum [DB]           report checksum of schema used by DB\n"
            "  schema-version [SCHEMA] report SCHEMA's schema version\n"
            "  schema-cksum [SCHEMA]   report SCHEMA's checksum\n"
+           "  schema-join [SCHEMA]    dump the joined schema in JSON format \n"
            "  query [DB] TRNS         execute read-only transaction on DB\n"
            "  transact [DB] TRNS      execute read/write transaction on DB\n"
            "  [-m]... show-log [DB]   print DB's log entries\n"
@@ -457,6 +458,24 @@ do_schema_cksum(struct ovs_cmdl_context *ctx)
 }
 
 static void
+do_schema_join(struct ovs_cmdl_context *ctx)
+{
+    const char *schema_file_name = ctx->argc >= 2 ? ctx->argv[1] : NULL;
+    struct shash *schemas;
+    struct ovsdb_schema *schema;
+    struct sset schema_names = SSET_INITIALIZER(&schema_names);
+
+    parse_schema_file_names(schema_file_name, &schema_names);
+    check_ovsdb_error(ovsdb_schemas_from_files(&schema_names, &schemas));
+    sset_destroy(&schema_names);
+
+    check_ovsdb_error(ovsdb_schemas_join(schemas, &schema));
+
+    print_and_free_json(ovsdb_schema_to_json(schema));
+    ovsdb_schema_destroy(schema);
+}
+
+static void
 transact(bool read_only, int argc, char *argv[])
 {
     const char *db_file_name = argc >= 3 ? argv[1] : default_db();
@@ -690,6 +709,7 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "db-cksum", "[db]", 0, 1, do_db_cksum },
     { "schema-version", "[schema]", 0, 1, do_schema_version },
     { "schema-cksum", "[schema]", 0, 1, do_schema_cksum },
+    { "schema-join", "[schema]", 0, 1, do_schema_join },
     { "query", "[db] trns", 1, 2, do_query },
     { "transact", "[db] trns", 1, 2, do_transact },
     { "show-log", "[db]", 0, 1, do_show_log },
