@@ -2016,10 +2016,18 @@ ctl_init(const struct ctl_table_class tables_[],
          const struct cmd_show_table cmd_show_tables_[],
          void (*ctl_exit_func_)(int status))
 {
-    tables = tables_;
+    ctl_register_table_class(tables_);
     cmd_show_tables = cmd_show_tables_;
     ctl_exit_func = ctl_exit_func_;
     ctl_register_commands(db_ctl_commands);
+}
+
+/* Register a new 'tables' that matches the current IDL class.  */
+void
+ctl_register_table_class(const struct ctl_table_class tables_[])
+{
+    ovs_assert(tables_);
+    tables = tables_;
 }
 
 /* Returns the text for the database commands usage.  */

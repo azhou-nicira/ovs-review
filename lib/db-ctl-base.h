@@ -49,6 +49,17 @@ struct cmd_show_table;
 void ctl_init(const struct ctl_table_class *tables,
               const struct cmd_show_table *cmd_show_tables,
               void (*ctl_exit_func)(int status));
+
+/* Interface to switch ctl_table_base by the user. db-ctl-base libray
+ * requires a valid 'table' entry that matches current IDL class.
+ * This interface can be used to update the 'tables' in the IDL class
+ * can be updated dynamically.
+ *
+ * ctl_init() sets up the default 'table'.  This interface updates
+ * the default to another valid 'tables',  NULL is not allowed.
+ * Caller handles the memory allocation and destructions for 'tables'.  */
+void ctl_register_table_class(const struct ctl_table_class *tables);
+
 char *ctl_default_db(void);
 OVS_NO_RETURN void ctl_fatal(const char *, ...) OVS_PRINTF_FORMAT(1, 2);
 
