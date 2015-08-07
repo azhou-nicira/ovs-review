@@ -1,10 +1,37 @@
+m4_divert_push([PREPARE_TESTS])
+[
+extended_ovs_schema () {
+    cat <<'EOF'
+    {"name": "Extended",
+     "version": "5.2.3",
+     "cksum": "22345678 9",
+        "tables": {
+            "Open_vSwitch": {
+                "columns": {
+                    "extra": {"type": "string"}},
+                "isRoot": true,
+                "maxRows": 1},
+            "Extra_table": {
+                "columns": {
+                    "extra_name": {"type": "string"},
+                    "extra_comment": {"type": "string"}},
+            "isRoot": true,
+            "maxRows": 500}}
+     }
+EOF
+}
+
+]
+m4_divert_pop([PREPARE_TESTS])
+
+
 dnl OVS_VSCTL_SETUP
 dnl
 dnl Creates an empty database in the current directory and then starts
 dnl an ovsdb-server on it for ovs-vsctl to connect to.
 m4_define([OVS_VSCTL_SETUP],
-  [OVSDB_INIT([db])
-   AT_CHECK([ovsdb-server --detach --no-chdir --pidfile="`pwd`"/pid --remote=punix:socket --unixctl="`pwd`"/unixctl db >/dev/null 2>&1], [0], [ignore], [ignore])])
+  [ OVSDB_INIT([db])
+    AT_CHECK([ovsdb-server --detach --no-chdir --pidfile="`pwd`"/pid --remote=punix:socket --unixctl="`pwd`"/unixctl db >/dev/null 2>&1], [0], [ignore], [ignore])])
 
 dnl OVS_VSCTL_CLEANUP
 dnl
@@ -1311,6 +1338,25 @@ dnl as the database UUIDs, the name can still be used to refer to rows.
 AT_CHECK([RUN_OVS_VSCTL([add-br 0fcd11a1-2ba8-4b38-a358-4bccf2bf3057])])
 AT_CHECK([RUN_OVS_VSCTL([get interface 0fcd11a1-2ba8-4b38-a358-4bccf2bf3057 type])], [0], [internal
 ])
+OVS_VSCTL_CLEANUP
+AT_CLEANUP
 
+AT_SETUP([extra column and table in joined schema])
+extended_ovs_schema > extended
+AT_CHECK([ovsdb-tool create db "$abs_top_srcdir"/vswitchd/vswitch.ovsschema',extended'], [0], [stdout], [ignore])
+OVS_VSCTL_SETUP
+
+dnl First check that the database commands can refer to row by database UUID.
+AT_CHECK([RUN_OVS_VSCTL([add-br br0])])
+AT_CHECK([RUN_OVS_VSCTL([set Open_vSwitch  . extra=aabbcc])], [0], [])
+AT_CHECK([RUN_OVS_VSCTL([get Open_vSwitch  . extra])], [0], [aabbcc
+])
+AT_CHECK([RUN_OVS_VSCTL([create Extra_table extra_name="aabbcc" -- list Extra_table ])], [0], [stdout], [], [OVS_VSCTL_CLEANUP])
+AT_CHECK([${PERL} $srcdir/uuidfilt.pl stdout], [0],
+  [[<0>
+_uuid               : <1>
+extra_comment       : ""
+extra_name          : aabbcc
+]], [ignore], [test ! -e pid || kill `cat pid`])
 OVS_VSCTL_CLEANUP
 AT_CLEANUP
