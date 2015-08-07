@@ -61,10 +61,17 @@ static const struct cmd_show_table *cmd_show_tables;
 static void (*ctl_exit_func)(int status) = NULL;
 OVS_NO_RETURN static void ctl_exit(int status);
 
-/* Represents all tables in the schema.  User must define 'tables'
+/* Represents all tables in the schema.  User must define 'default_ctl_tables'
  * in implementation and supply via clt_init().  The definition must end
- * with an all-NULL entry. */
-static const struct ctl_table_class *tables;
+ * with an all-NULL entry.
+ *
+ * 'tables' is actually used by the library. It is initialized to
+ * 'default_ctl_tables', and can be updated at run time by calling
+ * ctl_table_class_update(). Memory of dynamically created 'tables'
+ * will be managed by the library.
+ * */
+static const struct ctl_table_class *default_ctl_tables;
+static struct ctl_table_class *tables;
 
 static struct shash all_commands = SHASH_INITIALIZER(&all_commands);
 static const struct ctl_table_class *get_table(const char *table_name);
@@ -1967,6 +1974,10 @@ ctl_exit(int status)
     if (ctl_exit_func) {
         ctl_exit_func(status);
     }
+
+    if (tables != default_ctl_tables) {
+        free(tables);
+    }
     exit(status);
 }
 
@@ -2016,18 +2027,66 @@ ctl_init(const struct ctl_table_class tables_[],
          const struct cmd_show_table cmd_show_tables_[],
          void (*ctl_exit_func_)(int status))
 {
-    ctl_register_table_class(tables_);
+    default_ctl_tables = tables_;
+    tables = (struct ctl_table_class *)tables_;
     cmd_show_tables = cmd_show_tables_;
     ctl_exit_func = ctl_exit_func_;
     ctl_register_commands(db_ctl_commands);
 }
 
-/* Register a new 'tables' that matches the current IDL class.  */
+/* Create a ctl_table_class based on the new IDL class.
+ *
+ * The newly created ctl_table_class will be stored in 'tables'
+ * varialbe, and be used for future OVSDB command executions
+ * The memory of last 'tables' will be freed if it is not
+ * the default tables, set by ctl_init().   */
 void
-ctl_register_table_class(const struct ctl_table_class tables_[])
+ctl_table_class_update(const struct ovsdb_idl_class *idl_class)
 {
-    ovs_assert(tables_);
-    tables = tables_;
+    struct shash idl_tables = SHASH_INITIALIZER(&idl_tables);
+    struct shash_node *node;
+    const struct ctl_table_class *entry;
+    size_t row_ids_size = ARRAY_SIZE(entry->row_ids)
+                          * sizeof entry->row_ids[0];
+    size_t n, i;
+
+    if (tables != default_ctl_tables) {
+        free(tables);
+    }
+
+    /* Allocate memory for new tables, including the ending
+     * NULL entry */
+    n = idl_class->n_tables;
+    tables = xzalloc((n + 1) * sizeof *tables);
+
+    for (i = 0; i < n; i++) {
+        const struct ovsdb_idl_table_class *table = &idl_class->tables[i];
+        shash_add(&idl_tables, table->name, table);
+    }
+
+    i = 0;
+    for (entry = default_ctl_tables; entry->class; entry++) {
+        struct ctl_table_class *new_entry = &tables[i++];
+
+        new_entry->class = shash_find_and_delete_assert(&idl_tables,
+                                                        entry->class->name);
+        /* row_ids are only used by their names, don't need
+         * to replace those entries.  */
+        memcpy(new_entry->row_ids, entry->row_ids, row_ids_size);
+    }
+
+    /* Create new entries for tables not in the 'default_ctl_tables'. */
+    SHASH_FOR_EACH(node, &idl_tables) {
+        const struct ovsdb_idl_table_class *class = node->data;
+        struct ctl_table_class *new_entry = &tables[i++];
+
+        new_entry->class = class;
+        /* ids for the new entries will be NULLs */
+    }
+
+    shash_destroy(&idl_tables);
+
+    ovs_assert(i == n);
 }
 
 /* Returns the text for the database commands usage.  */

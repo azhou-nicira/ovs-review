@@ -46,7 +46,8 @@ struct table;
 
 struct ctl_table_class;
 struct cmd_show_table;
-void ctl_init(const struct ctl_table_class *tables,
+struct ovsdb_idl_class;
+void ctl_init(const struct ctl_table_class *default_ctl_tables,
               const struct cmd_show_table *cmd_show_tables,
               void (*ctl_exit_func)(int status));
 
@@ -58,7 +59,7 @@ void ctl_init(const struct ctl_table_class *tables,
  * ctl_init() sets up the default 'table'.  This interface updates
  * the default to another valid 'tables',  NULL is not allowed.
  * Caller handles the memory allocation and destructions for 'tables'.  */
-void ctl_register_table_class(const struct ctl_table_class *tables);
+void ctl_table_class_update(const struct ovsdb_idl_class *idl_class);
 
 char *ctl_default_db(void);
 OVS_NO_RETURN void ctl_fatal(const char *, ...) OVS_PRINTF_FORMAT(1, 2);
@@ -227,7 +228,7 @@ struct ctl_row_id {
 };
 
 struct ctl_table_class {
-    struct ovsdb_idl_table_class *class;
+    const struct ovsdb_idl_table_class *class;
     struct ctl_row_id row_ids[2];
 };
 
