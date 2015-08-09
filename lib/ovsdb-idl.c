@@ -456,6 +456,7 @@ ovsdb_idl_run(struct ovsdb_idl *idl)
                                                  msg->result,
                                                  idl->default_class);
                     ovsdb_idl_change_class(idl, new_class);
+                    idl_class_install(idl->idl_class_ops, idl, new_class);
                 };
                 ovsdb_idl_send_monitor_request(idl, msg->result);
                 idl->state = IDL_S_MONITOR_REQUESTED;

@@ -230,6 +230,7 @@ struct ovsdb_idl *ovsdb_idl_txn_get_idl (struct ovsdb_idl_txn *);
 struct ovsdb_idl_class_ops {
     struct ovsdb_idl_class *(*constructor)(const struct json *,
                                            const struct ovsdb_idl_class *);
+    void (*install)(struct ovsdb_idl *idl, const struct ovsdb_idl_class *);
     void (*destructor)(struct ovsdb_idl_class *);
 };
 
@@ -240,6 +241,13 @@ idl_class_create(const struct ovsdb_idl_class_ops *ops,
 {
     ovs_assert(ops);
     return (*ops->constructor)(schema_json, default_class);
+}
+
+static inline void
+idl_class_install(const struct ovsdb_idl_class_ops *ops,
+                  struct ovsdb_idl *idl, const struct ovsdb_idl_class *new_class)
+{
+    (*ops->install)(idl, new_class);
 }
 
 static inline void
