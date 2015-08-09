@@ -132,10 +132,12 @@ static void post_db_reload_expect_iface(const struct ovsrec_interface *);
 static struct uuid *neoteric_ifaces;
 static size_t n_neoteric_ifaces;
 static size_t allocated_neoteric_ifaces;
+struct ctl_command *commands;
+size_t n_commands;
 
 static struct ovsdb_idl_class *
-idl_class_from_json_schema(const struct json *ovsdb_schema,
-                           const struct ovsdb_idl_class *default_class)
+vsctl_idl_class_from_json_schema(const struct json *ovsdb_schema,
+                                 const struct ovsdb_idl_class *default_class)
 {
     struct ovsdb_schema *schema;
     struct ovsdb_idl_class *idl_class = NULL;
@@ -149,9 +151,15 @@ idl_class_from_json_schema(const struct json *ovsdb_schema,
         idl_class = ovsdb_idl_class_create(schema, default_class);
         ovsdb_schema_destroy(schema);
     }
-
-    ctl_table_class_update(idl_class);
     return idl_class;
+}
+
+static void
+vsctl_idl_class_install(struct ovsdb_idl *idl,
+                        const struct ovsdb_idl_class *new_class)
+{
+    ctl_table_class_update(new_class);
+    run_prerequisites(commands, n_commands, idl);
 }
 
 int
@@ -159,10 +167,8 @@ main(int argc, char *argv[])
 {
     extern struct vlog_module VLM_reconnect;
     struct ovsdb_idl *idl;
-    struct ctl_command *commands;
     struct shash local_options;
     unsigned int seqno;
-    size_t n_commands;
     char *args;
 
     set_program_name(argv[0]);
@@ -188,10 +194,13 @@ main(int argc, char *argv[])
     }
 
     /* Initialize IDL. */
-    struct ovsdb_idl_class_ops ops = {idl_class_from_json_schema,
+    struct ovsdb_idl_class_ops ops = {vsctl_idl_class_from_json_schema,
+                                      vsctl_idl_class_install,
                                       ovsdb_idl_class_destroy };
     idl = the_idl = ovsdb_idl_create(db, &ovsrec_idl_class, false, &ops, retry);
-    run_prerequisites(commands, n_commands, idl);
+
+    /* Do not run prerequisites now. Instead, run them after a new IDL class is created
+     * from the schema from vsctl_idl_class_install().   */
 
     /* Execute the commands.
      *
