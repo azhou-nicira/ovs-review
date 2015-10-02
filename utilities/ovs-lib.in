@@ -140,16 +140,16 @@ start_daemon () {
     strace=""
 
     # drop core files in a sensible place
-    test -d "$DAEMON_CWD" || install -d -m 755 -o root -g root "$DAEMON_CWD"
+    test -d "$DAEMON_CWD" || install -d -m 755 -o "$OVS_USER" -g "$OVS_GROUP" "$DAEMON_CWD"
     set "$@" --no-chdir
     cd "$DAEMON_CWD"
 
     # log file
-    test -d "$logdir" || install -d -m 755 -o root -g root "$logdir"
+    test -d "$logdir" || install -d -m 755 -o "$OVS_USER" -g "$OVS_GROUP" "$logdir"
     set "$@" --log-file="$logdir/$daemon.log"
 
     # pidfile and monitoring
-    test -d "$rundir" || install -d -m 755 -o root -g root "$rundir"
+    test -d "$rundir" || install -d -m 755 -o "$OVS_USER" -g "$OVS_GROUP" "$rundir"
     set "$@" --pidfile="$rundir/$daemon.pid"
     set "$@" --detach --monitor
 
