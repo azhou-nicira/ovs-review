@@ -25,6 +25,9 @@
 #                    the Open vSwitch kernel-based switch.
 ### END INIT INFO
 
+OVS_USER=ovs
+OVS_GROUP=$OVS_USER
+
 (test -x /usr/sbin/ovs-vswitchd && test -x /usr/sbin/ovsdb-server) || exit 0
 
 . /usr/share/openvswitch/scripts/ovs-lib
@@ -64,6 +67,7 @@ start () {
     if test X"$FORCE_COREFILES" != X; then
 	set "$@" --force-corefiles="$FORCE_COREFILES"
     fi
+    set "$@" --user=$OVS_USER:$OVS_GROUP
     set "$@" $OVS_CTL_OPTS
     "$@" || exit $?
     if [ "$2" = "start" ] && [ "$READ_INTERFACES" != "no" ]; then

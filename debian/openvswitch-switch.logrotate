@@ -1,7 +1,7 @@
 /var/log/openvswitch/*.log {
     daily
     compress
-    create 640 root adm
+    create 640 ovs adm
     delaycompress
     missingok
     rotate 30

@@ -10,6 +10,8 @@
 # Description:       Initializes the Open vSwitch VTEP emulator
 ### END INIT INFO
 
+OVS_USER=ovs
+OVS_GROUP=$OVS_USER
 
 # Include defaults if available
 default=/etc/default/openvswitch-vtep
@@ -40,17 +42,22 @@ start () {
         cd /etc/openvswitch && ovs-pki req ovsclient && ovs-pki self-sign ovsclient
     fi
 
+    chmod -R 0775 /var/run/openvswitch
+    directory_check /etc/openvswitch
+    directory_check /var/run/openvswitch
+
     ovsdb-server --pidfile --detach --log-file --remote \
         punix:/var/run/openvswitch/db.sock \
         --remote=db:hardware_vtep,Global,managers \
         --private-key=/etc/openvswitch/ovsclient-privkey.pem \
         --certificate=/etc/openvswitch/ovsclient-cert.pem \
         --bootstrap-ca-cert=/etc/openvswitch/vswitchd.cacert \
+        --user $OVS_USER:$OVS_GROUP \
         /etc/openvswitch/conf.db /etc/openvswitch/vtep.db
 
     modprobe openvswitch
 
-    ovs-vswitchd --pidfile --detach --log-file \
+    ovs-vswitchd --pidfile --detach --log-file --user $OVS_USER:$OVS_GROUP \
         unix:/var/run/openvswitch/db.sock
 }
 

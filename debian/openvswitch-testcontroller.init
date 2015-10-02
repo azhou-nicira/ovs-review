@@ -37,6 +37,8 @@ DAEMON=/usr/bin/ovs-testcontroller # Introduce the server's location here
 NAME=ovs-testcontroller         # Introduce the short server's name here
 DESC=ovs-testcontroller         # Introduce a short description here
 LOGDIR=/var/log/openvswitch	# Log directory to use
+OVS_USER=ovs
+OVS_GROUP=$OVS_USER
 
 PIDFILE=/var/run/openvswitch/$NAME.pid
 
@@ -109,7 +111,10 @@ start_server() {
     fi
 
     if [ ! -d /var/run/openvswitch ]; then
-        install -d -m 755 -o root -g root /var/run/openvswitch
+        install -d -m 775 -o $OVS_USER -g $OVS_GROUP /var/run/openvswitch
+    else
+        chown -R $OVS_USER:$OVS_GROUP /var/run/openvswitch
+        chmod 0775 -R /var/run/openvswitch
     fi
 
     SSL_OPTS=
@@ -139,6 +144,7 @@ start_server() {
         if [ -z "$DAEMONUSER" ] ; then
             start-stop-daemon --start --pidfile $PIDFILE \
                         --exec $DAEMON -- --detach --pidfile=$PIDFILE \
+                        --user $OVS_USER:$OVS_GROUP \
                         $LISTEN $DAEMON_OPTS $SSL_OPTS
             errcode=$?
         else

@@ -1,5 +1,5 @@
 #!/bin/sh
-# postinst script for openvswitch-pki
+# postinst script for openvswitch-switch
 #
 # see: dh_installdeb(1)
 
@@ -22,20 +22,20 @@ OVS_GROUP=$OVS_USER
 
 case "$1" in
     configure)
-        # Move the pki directory from its previous, non FHS-compliant location,
-        # to its new location, leaving behind a symlink for compatibility.
-        if test -d /usr/share/openvswitch/pki && \
-           test ! -e /var/lib/openvswitch/pki; then
-            mv /usr/share/openvswitch/pki /var/lib/openvswitch
-            ln -s /var/lib/openvswitch/pki /usr/share/openvswitch/pki
+        LOGDIR=/var/log/openvswitch
+        HOMEDIR=/var/run/openvswitch
+        # Create the ovs user and group.
+        if ! getent passwd ovs > /dev/null; then
+            echo 'Adding system-user for ovs' 1>&2
+            adduser --system --group --no-create-home --disabled-login \
+                     --quiet --home $HOMEDIR $OVS_USER
+            adduser $OVS_USER adm || true
         fi
 
-        # Create certificate authorities.
-        if test ! -e /var/lib/openvswitch/pki; then
-            ovs-pki init
-        fi
-
-        chown "$OVS_USER":"$OVS_GROUP" /var/lib/openvswitch
+        # Fix ownership and permissions.
+        chown "$OVS_USER":"$OVS_GROUP" $LOGDIR
+        chown "$OVS_USER":"$OVS_GROUP" $HOMEDIR
+        chmod 0775 $HOMEDIR
         ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)
@@ -50,5 +50,3 @@ esac
 #DEBHELPER#
 
 exit 0
-
-

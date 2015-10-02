@@ -5,6 +5,9 @@
 
 set -e
 
+OVS_USER=ovs
+OVS_GROUP=$OVS_USER
+
 # summary of how this script can be called:
 #        * <postinst> `configure' <most-recently-configured-version>
 #        * <old-postinst> `abort-upgrade' <new version>
@@ -33,6 +36,10 @@ case "$1" in
                 fi
             done
 	fi
+
+	# fix owner and permissions for /etc/openvswitch.
+	chown "$OVS_USER":"$OVS_GROU" /etc/openvswitch
+	chmod 0775 /etc/openvswitch
         ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)

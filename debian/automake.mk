@@ -8,6 +8,7 @@ EXTRA_DIST += \
 	debian/dkms.conf.in \
 	debian/dirs \
 	debian/openvswitch-common.dirs \
+	debian/openvswitch-common.postinst \
 	debian/openvswitch-common.docs \
 	debian/openvswitch-common.install \
 	debian/openvswitch-common.manpages \

@@ -60,6 +60,7 @@ Architecture: linux-any
 Depends: openssl,
          python,
          python (>= 2.7) | python-argparse,
+         adduser,
          ${misc:Depends},
          ${shlibs:Depends}
 Suggests: ethtool

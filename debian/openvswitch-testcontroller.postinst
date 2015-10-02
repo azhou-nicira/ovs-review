@@ -5,6 +5,9 @@
 
 set -e
 
+OVS_USER=ovs
+OVS_GROUP=$OVS_USER
+
 # summary of how this script can be called:
 #        * <postinst> `configure' <most-recently-configured-version>
 #        * <old-postinst> `abort-upgrade' <new version>
@@ -42,6 +45,8 @@ case "$1" in
             chmod go+r cert.pem req.pem
             umask $oldumask
         fi
+
+        chown "$OVS_USER":"$OVS_GROUP" /etc/openvswitch-testcontroller
         ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)
