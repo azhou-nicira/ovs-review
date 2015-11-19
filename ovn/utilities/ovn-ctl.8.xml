@@ -26,6 +26,7 @@
     <p><code>--ovn-northd-wrapper=<var>WRAPPER</var></code></p>
     <p><code>--ovn-controller-priority=<var>NICE</var></code></p>
     <p><code>--ovn-controller-wrapper=<var>WRAPPER</var></code></p>
+    <p><code>--user=<var>USER[:GROUP]</var></code></p>
     <p><code>-h</code> | <code>--help</code></p>
 
     <h1>File location options</h1>
@@ -46,5 +47,8 @@
     <p><code># ovs-ctl start --system-id="random"</code></p>
     <p><code># ovn-ctl start_northd</code></p>
     <p><code># ovn-ctl start_controller</code></p>
+
+    <h2>Run as the ovs user and group</h2>
+    <p><code># ovn-ctl --user=ovs:ovs start_controller</code></p>
 
 </manpage>

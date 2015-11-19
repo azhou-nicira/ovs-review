@@ -108,6 +108,8 @@ set_defaults () {
 
     OVS_RUNDIR=${OVS_RUNDIR:-${rundir}}
     OVN_RUNDIR=${OVN_RUNDIR:-${OVS_RUNDIR}}
+
+    USER="root:root"
 }
 
 set_option () {
@@ -145,6 +147,7 @@ Options:
   --ovn-northd-wrapper=WRAPPER   run with a wrapper like valgrind for debugging
   --ovn-controller-priority=NICE     set ovn-northd's niceness (default: $OVN_CONTROLLER_PRIORITY)
   --ovn-controller-wrapper=WRAPPER   run with a wrapper like valgrind for debugging
+  --user=USER                    run as 'USER' (default: root:root)
   -h, --help                     display this help message
 
 File location options:
@@ -206,6 +209,9 @@ do
             ;;
     esac
 done
+
+set_ovs_user_group $USER
+
 case $command in
     start_northd)
         start_northd
