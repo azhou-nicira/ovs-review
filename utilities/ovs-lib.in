@@ -70,8 +70,6 @@ ovs_ctl () {
 
 VERSION='@VERSION@'
 
-DAEMON_CWD=/
-
 LC_ALL=C; export LC_ALL
 
 ## ------------- ##
@@ -154,6 +152,23 @@ pid_comm_check () {
     [ "$1" = "`cat /proc/$2/comm`" ]
 }
 
+# Make sure the directory '$1' exits. If not, crate it. If yes, make sure
+# its group ownership agrees with $OVS_GROUP. If not, chown on all files
+# within it.  We don't enforce $OVS_USER to allow for multiple users that
+# shares $OVS_GROUP.
+directory_check() {
+    dir=$1
+
+    if test -d "$dir"; then
+        # Change the ownership of the top level directory and the first
+        # level files below it.
+       chown "$OVS_USER":"$OVS_GROUP" "$dir"
+       find "$dir" -maxdepth 1 -type f -exec chown "$OVS_USER":"$OVS_GROUP" {} \;
+    else
+        install -d -m 775 -o "$OVS_USER" -g "$OVS_GROUP" "$dir"
+    fi
+}
+
 start_daemon () {
     priority=$1
     wrapper=$2
@@ -161,19 +176,23 @@ start_daemon () {
     daemon=$1
     strace=""
 
-    # drop core files in a sensible place
-    test -d "$DAEMON_CWD" || install -d -m 755 -o "$OVS_USER" -g "$OVS_GROUP" "$DAEMON_CWD"
-    set "$@" --no-chdir
-    cd "$DAEMON_CWD"
-
     # log file
-    test -d "$logdir" || install -d -m 755 -o "$OVS_USER" -g "$OVS_GROUP" "$logdir"
+    directory_check "$logdir"
     set "$@" --log-file="$logdir/$daemon.log"
 
     # pidfile and monitoring
-    test -d "$rundir" || install -d -m 755 -o "$OVS_USER" -g "$OVS_GROUP" "$rundir"
+    directory_check "$rundir"
     set "$@" --pidfile="$rundir/$daemon.pid"
     set "$@" --detach --monitor
+
+    # drop core files in a sensible place
+    cd "$rundir"
+    set "$@" --no-chdir
+
+    # add --user for non root user
+    if test "$OVS_USER" != "root" || test "$OVS_GROUP" != "root"; then
+        set "$@" --user="$OVS_USER":"$OVS_GROUP"
+    fi
 
     # wrapper
     case $wrapper in
