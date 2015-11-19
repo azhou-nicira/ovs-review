@@ -148,6 +148,11 @@ start_ovsdb () {
         # Create initial database or upgrade database schema.
         upgrade_db $DB_FILE $DB_SCHEMA || return 1
 
+        # Make sure we change the ownership of the 'DB_FILE" and its related
+        # lock files, by changing the ownership of the the directory and of
+        # the files in it.
+        directory_check `dirname "$DB_FILE"`
+
         # Start ovsdb-server.
         set ovsdb-server "$DB_FILE"
         for db in $EXTRA_DBS; do
