@@ -128,6 +128,28 @@ pid_exists () {
     test -d /proc/"$1"
 }
 
+set_ovs_user_group() {
+    value=$1   # user spec (e.g. ovs:ovs)
+
+    case $value in
+    [a-z]*:*)
+        OVS_USER=`expr X"$value" : 'X\(.*\):.*'`
+        OVS_GROUP=`expr X"$value" : 'X[^:]*:\(.*\)'`
+        if  test X"$OVS_GROUP" = X; then
+           OVS_GROUP=$OVS_USER
+        fi
+        ;;
+    [a-z]*)
+        OVS_USER=`expr X"$value" : 'X\(.*\)'`
+        OVS_GROUP=$OVS_USER
+        ;;
+    *)
+        OVS_USER=root
+        OVS_GROUP=root
+        ;;
+    esac
+}
+
 pid_comm_check () {
     [ "$1" = "`cat /proc/$2/comm`" ]
 }

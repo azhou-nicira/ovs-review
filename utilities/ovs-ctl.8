@@ -123,6 +123,11 @@ another string is specified \fBovs\-ctl\fR uses it literally.
 The following options should be specified if the defaults are not
 suitable:
 .
+.IP "\fB\-\-user=\fIuser\fR[\fB:\fIgroup\fR]"
+Run OVS daemons as the user specified. When this options is specified, OVS
+daemons will run with the least privileges necessary, and switch the
+deemon process's real and effective user and group to the ones specified.
+.
 .IP "\fB\-\-system\-type=\fItype\fR"
 .IQ "\fB\-\-system\-version=\fIversion\fR"
 Sets the value to store in the \fBsystem-type\fR and

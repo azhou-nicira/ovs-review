@@ -535,6 +535,8 @@ set_defaults () {
         SYSTEM_TYPE=unknown
         SYSTEM_VERSION=unknown
     fi
+
+    USER="root:root"
 }
 
 usage () {
@@ -573,6 +575,7 @@ Less important options for "start", "restart" and "force-reload-kmod":
   --daemon-cwd=DIR               set working dir for OVS daemons (default: $DAEMON_CWD)
   --no-force-corefiles           do not force on core dumps for OVS daemons
   --no-mlockall                  do not lock all of ovs-vswitchd into memory
+  --user=USER[:GROUP]            run ovs daemons as the root user of ovs user (default: $OVS_USER:$OVS_GROUP)
   --ovsdb-server-priority=NICE   set ovsdb-server's niceness (default: $OVSDB_SERVER_PRIORITY)
   --ovs-vswitchd-priority=NICE   set ovs-vswitchd's niceness (default: $OVS_VSWITCHD_PRIORITY)
 
@@ -685,6 +688,9 @@ do
             ;;
     esac
 done
+
+set_ovs_user_group $USER
+
 case $command in
     start)
         start_ovsdb || exit 1
