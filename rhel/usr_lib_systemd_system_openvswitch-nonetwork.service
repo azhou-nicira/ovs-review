@@ -9,7 +9,7 @@ Type=oneshot
 RemainAfterExit=yes
 EnvironmentFile=-/etc/sysconfig/openvswitch
 ExecStart=/usr/share/openvswitch/scripts/ovs-ctl start \
-          --system-id=random $OPTIONS
+          --system-id=random --user=ovs:ovs $OPTIONS
 ExecStop=/usr/share/openvswitch/scripts/ovs-ctl stop
 RuntimeDirectory=openvswitch
-RuntimeDirectoryMode=0755
+RuntimeDirectoryMode=0775

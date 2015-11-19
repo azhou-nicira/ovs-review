@@ -18,5 +18,5 @@ Type=simple
 Environment=OVS_RUNDIR=%t/openvswitch
 Environment=OVS_DB=unix:%t/openvswitch/db.sock
 ExecStart=/usr/bin/ovn-controller -vconsole:emer -vsyslog:err -vfile:info \
-          --log-file=/var/log/openvswitch/ovn-controller.log \
+          --log-file=/var/log/openvswitch/ovn-controller.log --user ovs:ovs \
           --no-chdir --pidfile=${OVS_RUNDIR}/ovn-controller.pid ${OVS_DB}

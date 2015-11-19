@@ -13,10 +13,6 @@
 
 #%define kernel 2.6.40.4-5.fc15.x86_64
 
-# If libcap-ng isn't available and there is no need for running OVS
-# as regular user, specify the '--without libcapng'
-%bcond_without libcapng
-
 # Enable PIE, bz#955181
 %global _hardened_build 1
 
@@ -46,9 +42,7 @@ BuildRequires: desktop-file-utils
 BuildRequires: groff graphviz
 # make check dependencies
 BuildRequires: procps-ng
-%if %{with libcapng}
 BuildRequires: libcap-ng libcap-ng-devel
-%endif
 
 Requires: openssl iproute module-init-tools
 #Upstream kernel commit 4f647e0a3c37b8d5086214128614a136064110c3
@@ -112,11 +106,7 @@ overlays and security groups.
 
 %build
 %configure \
-%if %{with libcapng}
         --enable-libcapng \
-%else
-        --disable-libcapng \
-%endif
         --enable-ssl \
         --with-pkidir=%{_sharedstatedir}/openvswitch/pki
 
@@ -162,6 +152,11 @@ install -d -m 0755 $RPM_BUILD_ROOT/%{_sharedstatedir}/openvswitch
 touch $RPM_BUILD_ROOT%{_sysconfdir}/openvswitch/conf.db
 touch $RPM_BUILD_ROOT%{_sysconfdir}/openvswitch/system-id.conf
 
+%pre
+# Add the "ovs" user and group
+/usr/sbin/useradd -c "Openvswitch Daemons" -s /sbin/nologin -r \
+                  -d %{_rundir}/openvswitch ovs 2> /dev/null || :
+
 %check
 %if %{with check}
     if make check TESTSUITEFLAGS='%{_smp_mflags}' ||
@@ -204,6 +199,8 @@ rm -rf $RPM_BUILD_ROOT
 %endif
 
 %post
+chown -R ovs:ovs /etc/openvswitch  #OVS DB files
+chown -R ovs:ovs %{_rundir}/openvswitch
 %if 0%{?systemd_post:1}
     %systemd_post %{name}.service
 %else
@@ -214,6 +211,7 @@ rm -rf $RPM_BUILD_ROOT
 %endif
 
 %post ovn
+chown -R ovs:ovs /var/lib/openvswitch  #OVN DB files
 %if 0%{?systemd_post:1}
     %systemd_post ovn-controller.service
     %systemd_post ovn-controller-vtep.service

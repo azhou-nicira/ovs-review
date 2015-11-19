@@ -8,5 +8,5 @@ After=openvswitch.service
 Type=oneshot
 RemainAfterExit=yes
 Environment=OVS_RUNDIR=%t/openvswitch OVS_DBDIR=/var/lib/openvswitch
-ExecStart=/usr/share/openvswitch/scripts/ovn-ctl start_northd
+ExecStart=/usr/share/openvswitch/scripts/ovn-ctl --user=ovs:ovs start_northd
 ExecStop=/usr/share/openvswitch/scripts/ovn-ctl stop_northd
