@@ -729,13 +729,14 @@ enum ovs_ct_attr {
  * fields within a header are modifiable, e.g. the IPv4 protocol and fragment
  * type may not be changed.
  *
- *
  * @OVS_ACTION_ATTR_SET_TO_MASKED: Kernel internal masked set action translated
  * from the @OVS_ACTION_ATTR_SET.
  * @OVS_ACTION_ATTR_TUNNEL_PUSH: Push tunnel header described by struct
  * ovs_action_push_tnl.
  * @OVS_ACTION_ATTR_TUNNEL_POP: Lookup tunnel port by port-no passed and pop
  * tunnel header.
+ * @OVS_ACTION_ATTR_METER: Run packet through a meter, which may drop the
+ * packet, or modify the packet (e.g., change the DSCP field).
  */
 
 enum ovs_action_attr {
@@ -757,8 +758,9 @@ enum ovs_action_attr {
 	OVS_ACTION_ATTR_CT,           /* Nested OVS_CT_ATTR_* . */
 
 #ifndef __KERNEL__
-	OVS_ACTION_ATTR_TUNNEL_PUSH,   /* struct ovs_action_push_tnl*/
-	OVS_ACTION_ATTR_TUNNEL_POP,    /* u32 port number. */
+	OVS_ACTION_ATTR_TUNNEL_PUSH,  /* struct ovs_action_push_tnl. */
+	OVS_ACTION_ATTR_TUNNEL_POP,   /* u32 port number. */
+	OVS_ACTION_ATTR_METER,	      /* u32 meter number. */
 #endif
 	__OVS_ACTION_ATTR_MAX,	      /* Nothing past this will be accepted
 				       * from userspace. */

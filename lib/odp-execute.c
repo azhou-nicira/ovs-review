@@ -493,6 +493,7 @@ requires_datapath_assistance(const struct nlattr *a)
     case OVS_ACTION_ATTR_USERSPACE:
     case OVS_ACTION_ATTR_RECIRC:
     case OVS_ACTION_ATTR_CT:
+    case OVS_ACTION_ATTR_METER:
         return true;
 
     case OVS_ACTION_ATTR_SET:
@@ -621,6 +622,10 @@ odp_execute_actions(void *dp, struct dp_packet **packets, int cnt, bool steal,
                  * stolen them*/
                 return;
             }
+            break;
+
+        case OVS_ACTION_ATTR_METER:
+            /* Not implemented yet. */
             break;
 
         case OVS_ACTION_ATTR_OUTPUT:
