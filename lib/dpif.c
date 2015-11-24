@@ -1089,7 +1089,7 @@ struct dpif_execute_helper_aux {
 
 /* This is called for actions that need the context of the datapath to be
  * meaningful. */
-static void
+static int
 dpif_execute_helper_cb(void *aux_, struct dp_packet **packets, int cnt,
                        const struct nlattr *action, bool may_steal OVS_UNUSED)
 {
@@ -1136,7 +1136,8 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet **packets, int cnt,
         if (md->tunnel.ip_dst) {
             ofpbuf_uninit(&execute_actions);
         }
-        break;
+
+        return (aux->error == 0) ? cnt : 0;
     }
 
     case OVS_ACTION_ATTR_HASH:
@@ -1152,6 +1153,7 @@ dpif_execute_helper_cb(void *aux_, struct dp_packet **packets, int cnt,
     case __OVS_ACTION_ATTR_MAX:
         OVS_NOT_REACHED();
     }
+    return 0;
 }
 
 /* Executes 'execute' by performing most of the actions in userspace and

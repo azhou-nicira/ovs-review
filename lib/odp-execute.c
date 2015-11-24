@@ -26,11 +26,11 @@
 
 #include "dp-packet.h"
 #include "dpif.h"
+#include "flow.h"
 #include "netlink.h"
 #include "odp-netlink.h"
 #include "odp-util.h"
 #include "packets.h"
-#include "flow.h"
 #include "unaligned.h"
 #include "util.h"
 
@@ -444,9 +444,14 @@ odp_execute_masked_set_action(struct dp_packet *packet,
 }
 
 static void
-odp_execute_sample(void *dp, struct dp_packet *packet, bool steal,
+odp_execute_actions__(void *dp, struct dp_packet **packets, int cnt,
+                      const struct nlattr *actions, size_t actions_len,
+                      odp_execute_cb dp_execute_action, bool may_steal);
+
+static void
+odp_execute_sample(void *dp, struct dp_packet **packet_p,
                    const struct nlattr *action,
-                   odp_execute_cb dp_execute_action)
+                   odp_execute_cb dp_execute_action, bool may_steal)
 {
     const struct nlattr *subactions = NULL;
     const struct nlattr *a;
@@ -458,8 +463,8 @@ odp_execute_sample(void *dp, struct dp_packet *packet, bool steal,
         switch ((enum ovs_sample_attr) type) {
         case OVS_SAMPLE_ATTR_PROBABILITY:
             if (random_uint32() >= nl_attr_get_u32(a)) {
-                if (steal) {
-                    dp_packet_delete(packet);
+                if (may_steal) {
+                    dp_packet_delete(*packet_p);
                 }
                 return;
             }
@@ -476,8 +481,9 @@ odp_execute_sample(void *dp, struct dp_packet *packet, bool steal,
         }
     }
 
-    odp_execute_actions(dp, &packet, 1, steal, nl_attr_get(subactions),
-                        nl_attr_get_size(subactions), dp_execute_action);
+    odp_execute_actions__(dp, packet_p, 1, nl_attr_get(subactions),
+                          nl_attr_get_size(subactions), dp_execute_action,
+                          may_steal);
 }
 
 static bool
@@ -514,10 +520,10 @@ requires_datapath_assistance(const struct nlattr *a)
     return false;
 }
 
-void
-odp_execute_actions(void *dp, struct dp_packet **packets, int cnt, bool steal,
-                    const struct nlattr *actions, size_t actions_len,
-                    odp_execute_cb dp_execute_action)
+static void
+odp_execute_actions__(void *dp, struct dp_packet **packets, int cnt,
+                      const struct nlattr *actions, size_t actions_len,
+                      odp_execute_cb dp_execute_action, bool may_steal)
 {
     const struct nlattr *a;
     unsigned int left;
@@ -530,16 +536,13 @@ odp_execute_actions(void *dp, struct dp_packet **packets, int cnt, bool steal,
         if (requires_datapath_assistance(a)) {
             if (dp_execute_action) {
                 /* Allow 'dp_execute_action' to steal the packet data if we do
-                 * not need it any more. */
-                bool may_steal = steal && last_action;
-
-                dp_execute_action(dp, packets, cnt, a, may_steal);
-
-                if (last_action) {
-                    /* We do not need to free the packets. dp_execute_actions()
-                     * has stolen them */
-                    return;
-                }
+                 * not need it any more.  As a precaution, packets actually
+                 * stolen have their pointers set to NULL, so that we can
+                 * catch bugs where the stolen packet is referenced afterwards.
+                 * 'dp_execute_action' may also effectively drop packets by
+                 * returning a count smaller than 'cnt' parameter. */
+                cnt = dp_execute_action(dp, packets, cnt, a,
+                                        may_steal && last_action);
             }
             continue;
         }
@@ -613,14 +616,8 @@ odp_execute_actions(void *dp, struct dp_packet **packets, int cnt, bool steal,
 
         case OVS_ACTION_ATTR_SAMPLE:
             for (i = 0; i < cnt; i++) {
-                odp_execute_sample(dp, packets[i], steal && last_action, a,
-                                   dp_execute_action);
-            }
-
-            if (last_action) {
-                /* We do not need to free the packets. odp_execute_sample() has
-                 * stolen them*/
-                return;
+                odp_execute_sample(dp, &packets[i], a, dp_execute_action,
+                                   may_steal && last_action);
             }
             break;
 
@@ -639,10 +636,21 @@ odp_execute_actions(void *dp, struct dp_packet **packets, int cnt, bool steal,
             OVS_NOT_REACHED();
         }
     }
+}
 
+void
+odp_execute_actions(void *dp, struct dp_packet **packets, int cnt, bool steal,
+                    const struct nlattr *actions, size_t actions_len,
+                    odp_execute_cb dp_execute_action)
+{
+    odp_execute_actions__(dp, packets, cnt, actions, actions_len,
+                          dp_execute_action, steal);
     if (steal) {
-        for (i = 0; i < cnt; i++) {
-            dp_packet_delete(packets[i]);
+        for (int i = 0; i < cnt; i++) {
+            /* Packets may already have been taken, e.g. by output actions. */
+            if (packets[i]) {
+                dp_packet_delete(packets[i]);
+            }
         }
     }
 }

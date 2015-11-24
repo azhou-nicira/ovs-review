@@ -350,20 +350,16 @@ pop_mpls(struct dp_packet *packet, ovs_be16 ethtype)
 const char *
 eth_from_hex(const char *hex, struct dp_packet **packetp)
 {
-    struct dp_packet *packet;
-
     /* Use 2 bytes of headroom to 32-bit align the L3 header. */
-    packet = *packetp = dp_packet_new_with_headroom(strlen(hex) / 2, 2);
+    *packetp = dp_packet_new_with_headroom(strlen(hex) / 2, 2);
 
-    if (dp_packet_put_hex(packet, hex, NULL)[0] != '\0') {
-        dp_packet_delete(packet);
-        *packetp = NULL;
+    if (dp_packet_put_hex(*packetp, hex, NULL)[0] != '\0') {
+        dp_packet_delete(*packetp);
         return "Trailing garbage in packet data";
     }
 
-    if (dp_packet_size(packet) < ETH_HEADER_LEN) {
-        dp_packet_delete(packet);
-        *packetp = NULL;
+    if (dp_packet_size(*packetp) < ETH_HEADER_LEN) {
+        dp_packet_delete(*packetp);
         return "Packet data too short for Ethernet";
     }
 

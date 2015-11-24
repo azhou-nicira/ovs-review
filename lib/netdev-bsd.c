@@ -684,7 +684,7 @@ netdev_bsd_rxq_drain(struct netdev_rxq *rxq_)
  */
 static int
 netdev_bsd_send(struct netdev *netdev_, int qid OVS_UNUSED,
-                struct dp_packet **pkts, int cnt, bool may_steal)
+                struct dp_packet **pkts, int cnt, bool may_steal OVS_UNUSED)
 {
     struct netdev_bsd *dev = netdev_bsd_cast(netdev_);
     const char *name = netdev_get_name(netdev_);
@@ -731,12 +731,6 @@ netdev_bsd_send(struct netdev *netdev_, int qid OVS_UNUSED,
     }
 
     ovs_mutex_unlock(&dev->mutex);
-    if (may_steal) {
-        for (i = 0; i < cnt; i++) {
-            dp_packet_delete(pkts[i]);
-        }
-    }
-
     return error;
 }
 

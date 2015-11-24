@@ -3478,14 +3478,12 @@ dpif_netdev_register_upcall_cb(struct dpif *dpif, upcall_callback *cb,
 }
 
 static void
-dp_netdev_drop_packets(struct dp_packet **packets, int cnt, bool may_steal)
+dp_netdev_drop_packets(struct dp_packet **packets, int cnt)
 {
-    if (may_steal) {
-        int i;
+    int i;
 
-        for (i = 0; i < cnt; i++) {
-            dp_packet_delete(packets[i]);
-        }
+    for (i = 0; i < cnt; i++) {
+        dp_packet_delete(packets[i]);
     }
 }
 
@@ -3519,7 +3517,8 @@ dp_netdev_clone_pkt_batch(struct dp_packet **dst_pkts,
     }
 }
 
-static void
+/* Mark stolen packets by setting the corresponding packet pointer to NULL. */
+static int
 dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
               const struct nlattr *a, bool may_steal)
     OVS_NO_THREAD_SAFETY_ANALYSIS
@@ -3537,7 +3536,6 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
         p = dp_netdev_lookup_port(dp, u32_to_odp(nl_attr_get_u32(a)));
         if (OVS_LIKELY(p)) {
             netdev_send(p->netdev, pmd->tx_qid, packets, cnt, may_steal);
-            return;
         }
         break;
 
@@ -3556,10 +3554,11 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
                 (*depth)++;
                 dp_netdev_input(pmd, packets, cnt);
                 (*depth)--;
-            } else {
-                dp_netdev_drop_packets(tnl_pkt, cnt, !may_steal);
+                goto stolen;
+            } else if (!may_steal) {
+                /* Drop the cloned packets. */
+                dp_netdev_drop_packets(tnl_pkt, cnt);
             }
-            return;
         }
         break;
 
@@ -3579,7 +3578,6 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
 
                 err = netdev_pop_header(p->netdev, packets, cnt);
                 if (!err) {
-
                     for (i = 0; i < cnt; i++) {
                         packets[i]->md.in_port.odp_port = portno;
                     }
@@ -3587,10 +3585,11 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
                     (*depth)++;
                     dp_netdev_input(pmd, packets, cnt);
                     (*depth)--;
-                } else {
-                    dp_netdev_drop_packets(tnl_pkt, cnt, !may_steal);
+                    goto stolen;
+                } else if (!may_steal) {
+                    /* Drop the cloned packets. */
+                    dp_netdev_drop_packets(tnl_pkt, cnt);
                 }
-                return;
             }
         }
         break;
@@ -3625,7 +3624,6 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
             ofpbuf_uninit(&actions);
             fat_rwlock_unlock(&dp->upcall_rwlock);
 
-            return;
         }
         break;
 
@@ -3634,8 +3632,8 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
             struct dp_packet *recirc_pkts[NETDEV_MAX_BURST];
 
             if (!may_steal) {
-               dp_netdev_clone_pkt_batch(recirc_pkts, packets, cnt);
-               packets = recirc_pkts;
+                dp_netdev_clone_pkt_batch(recirc_pkts, packets, cnt);
+                packets = recirc_pkts;
             }
 
             for (i = 0; i < cnt; i++) {
@@ -3645,11 +3643,10 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
             (*depth)++;
             dp_netdev_input(pmd, packets, cnt);
             (*depth)--;
-
-            return;
+            goto stolen;
+        } else {
+            VLOG_WARN("Packet dropped. Max recirculation depth exceeded.");
         }
-
-        VLOG_WARN("Packet dropped. Max recirculation depth exceeded.");
         break;
 
     case OVS_ACTION_ATTR_CT:
@@ -3660,6 +3657,8 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
         break;
 
     case OVS_ACTION_ATTR_METER:
+        break; /* Never drop. */
+
     case OVS_ACTION_ATTR_PUSH_VLAN:
     case OVS_ACTION_ATTR_POP_VLAN:
     case OVS_ACTION_ATTR_PUSH_MPLS:
@@ -3673,7 +3672,15 @@ dp_execute_cb(void *aux_, struct dp_packet **packets, int cnt,
         OVS_NOT_REACHED();
     }
 
-    dp_netdev_drop_packets(packets, cnt, may_steal);
+    return cnt;
+stolen:
+    /* Mark stolen packets. */
+    if (may_steal) {
+        for (i = 0; i < cnt; i++) {
+            packets[i] = NULL;
+        }
+    }
+    return cnt;
 }
 
 static void

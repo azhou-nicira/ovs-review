@@ -1120,7 +1120,7 @@ netdev_linux_rxq_drain(struct netdev_rxq *rxq_)
  * expected to do additional queuing of packets. */
 static int
 netdev_linux_send(struct netdev *netdev_, int qid OVS_UNUSED,
-                  struct dp_packet **pkts, int cnt, bool may_steal)
+                  struct dp_packet **pkts, int cnt, bool may_steal OVS_UNUSED)
 {
     int i;
     int error = 0;
@@ -1200,19 +1200,12 @@ netdev_linux_send(struct netdev *netdev_, int qid OVS_UNUSED,
         i++;
     }
 
-    if (may_steal) {
-        for (i = 0; i < cnt; i++) {
-            dp_packet_delete(pkts[i]);
-        }
-    }
-
     if (error && error != EAGAIN) {
             VLOG_WARN_RL(&rl, "error sending Ethernet packet on %s: %s",
                          netdev_get_name(netdev_), ovs_strerror(error));
     }
 
     return error;
-
 }
 
 /* Registers with the poll loop to wake up from the next call to poll_block()

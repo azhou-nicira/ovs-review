@@ -108,7 +108,16 @@ struct dp_packet *dp_packet_clone_with_headroom(const struct dp_packet *,
 struct dp_packet *dp_packet_clone_data(const void *, size_t);
 struct dp_packet *dp_packet_clone_data_with_headroom(const void *, size_t,
                                                      size_t headroom);
-static inline void dp_packet_delete(struct dp_packet *);
+static inline void dp_packet_delete__(struct dp_packet *);
+
+/* NULL the packet pointer to mark the packet as deleted. */
+#define dp_packet_delete(PKT)                   \
+    do {                                        \
+        struct dp_packet **pkt__ = &(PKT);      \
+                                                \
+        dp_packet_delete__(*pkt__);             \
+        *pkt__ = NULL;                          \
+    } while (0)
 
 static inline void *dp_packet_at(const struct dp_packet *, size_t offset,
                                  size_t size);
@@ -147,7 +156,7 @@ static inline bool dp_packet_equal(const struct dp_packet *,
 
 /* Frees memory that 'b' points to, as well as 'b' itself. */
 static inline void
-dp_packet_delete(struct dp_packet *b)
+dp_packet_delete__(struct dp_packet *b)
 {
     if (b) {
         if (b->source == DPBUF_DPDK) {

@@ -306,6 +306,10 @@ struct netdev_class {
      * been sent anyway.
      *
      * To retain ownership of 'buffers' caller can set may_steal to false.
+     * When 'may_steal' is set to 'true', the network device will set the
+     * pointer of each packet in 'buffers' whose ownership was taken ('stolen')
+     * to NULL.  The caller retains ownership of all packets whose pointer is
+     * non-NULL on return.
      *
      * The network device is expected to maintain one or more packet
      * transmission queues, so that the caller does not ordinarily have to

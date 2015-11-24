@@ -1061,7 +1061,7 @@ netdev_dpdk_vhost_update_tx_counters(struct netdev_stats *stats,
 
 static void
 __netdev_dpdk_vhost_send(struct netdev *netdev, struct dp_packet **pkts,
-                         int cnt, bool may_steal)
+                         int cnt)
 {
     struct netdev_dpdk *vhost_dev = netdev_dpdk_cast(netdev);
     struct virtio_net *virtio_dev = netdev_dpdk_get_virtio(vhost_dev);
@@ -1071,9 +1071,9 @@ __netdev_dpdk_vhost_send(struct netdev *netdev, struct dp_packet **pkts,
 
     if (OVS_UNLIKELY(!is_vhost_running(virtio_dev))) {
         rte_spinlock_lock(&vhost_dev->stats_lock);
-        vhost_dev->stats.tx_dropped+= cnt;
+        vhost_dev->stats.tx_dropped += cnt;
         rte_spinlock_unlock(&vhost_dev->stats_lock);
-        goto out;
+        return;
     }
 
     /* There is vHost TX single queue, So we need to lock it for TX. */
@@ -1119,20 +1119,13 @@ __netdev_dpdk_vhost_send(struct netdev *netdev, struct dp_packet **pkts,
     netdev_dpdk_vhost_update_tx_counters(&vhost_dev->stats, pkts, total_pkts,
                                          cnt);
     rte_spinlock_unlock(&vhost_dev->stats_lock);
-
-out:
-    if (may_steal) {
-        int i;
-
-        for (i = 0; i < total_pkts; i++) {
-            dp_packet_delete(pkts[i]);
-        }
-    }
 }
 
+/* Queue 'pkts' for transmission.  The ownership of the referred memory is
+ * taken. */
 inline static void
 dpdk_queue_pkts(struct netdev_dpdk *dev, int qid,
-               struct rte_mbuf **pkts, int cnt)
+                struct rte_mbuf **pkts, int cnt)
 {
     struct dpdk_tx_queue *txq = &dev->tx_q[qid];
     uint64_t diff_tsc;
@@ -1157,6 +1150,9 @@ dpdk_queue_pkts(struct netdev_dpdk *dev, int qid,
             dpdk_queue_flush__(dev, qid);
         }
     }
+
+    /* Clear the transferred pointers to mark them as 'taken'. */
+    memset(pkts, 0, cnt * sizeof *pkts);
 }
 
 /* Tx function. Transmit packets indefinitely */
@@ -1230,20 +1226,13 @@ dpdk_do_tx_copy(struct netdev *netdev, int qid, struct dp_packet **pkts,
 }
 
 static int
-netdev_dpdk_vhost_send(struct netdev *netdev, int qid OVS_UNUSED, struct dp_packet **pkts,
-                 int cnt, bool may_steal)
+netdev_dpdk_vhost_send(struct netdev *netdev, int qid OVS_UNUSED,
+                       struct dp_packet **pkts, int cnt)
 {
     if (OVS_UNLIKELY(pkts[0]->source != DPBUF_DPDK)) {
-        int i;
-
         dpdk_do_tx_copy(netdev, qid, pkts, cnt);
-        if (may_steal) {
-            for (i = 0; i < cnt; i++) {
-                dp_packet_delete(pkts[i]);
-            }
-        }
     } else {
-        __netdev_dpdk_vhost_send(netdev, pkts, cnt, may_steal);
+        __netdev_dpdk_vhost_send(netdev, pkts, cnt);
     }
     return 0;
 }
@@ -1259,17 +1248,8 @@ netdev_dpdk_send__(struct netdev_dpdk *dev, int qid,
         rte_spinlock_lock(&dev->tx_q[qid].tx_lock);
     }
 
-    if (OVS_UNLIKELY(!may_steal ||
-                     pkts[0]->source != DPBUF_DPDK)) {
-        struct netdev *netdev = &dev->up;
-
-        dpdk_do_tx_copy(netdev, qid, pkts, cnt);
-
-        if (may_steal) {
-            for (i = 0; i < cnt; i++) {
-                dp_packet_delete(pkts[i]);
-            }
-        }
+    if (OVS_UNLIKELY(!may_steal || pkts[0]->source != DPBUF_DPDK)) {
+        dpdk_do_tx_copy(&dev->up, qid, pkts, cnt);
     } else {
         int next_tx_idx = 0;
         int dropped = 0;
@@ -1281,21 +1261,20 @@ netdev_dpdk_send__(struct netdev_dpdk *dev, int qid,
                 if (next_tx_idx != i) {
                     dpdk_queue_pkts(dev, qid,
                                     (struct rte_mbuf **)&pkts[next_tx_idx],
-                                    i-next_tx_idx);
+                                    i - next_tx_idx);
                 }
 
                 VLOG_WARN_RL(&rl, "Too big size %d max_packet_len %d",
                              (int)size , dev->max_packet_len);
 
-                dp_packet_delete(pkts[i]);
                 dropped++;
                 next_tx_idx = i + 1;
             }
         }
         if (next_tx_idx != cnt) {
-           dpdk_queue_pkts(dev, qid,
+            dpdk_queue_pkts(dev, qid,
                             (struct rte_mbuf **)&pkts[next_tx_idx],
-                            cnt-next_tx_idx);
+                            cnt - next_tx_idx);
         }
 
         if (OVS_UNLIKELY(dropped)) {
