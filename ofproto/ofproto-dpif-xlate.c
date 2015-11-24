@@ -3979,6 +3979,15 @@ xlate_sample_action(struct xlate_ctx *ctx,
                           ODPP_NONE, false);
 }
 
+static void
+xlate_meter_action(struct xlate_ctx *ctx, const struct ofpact_meter *meter)
+{
+    if (meter->provider_meter_id != UINT32_MAX) {
+        nl_msg_put_u32(ctx->odp_actions, OVS_ACTION_ATTR_METER,
+                       meter->provider_meter_id);
+    }
+}
+
 static bool
 may_receive(const struct xport *xport, struct xlate_ctx *ctx)
 {
@@ -4598,7 +4607,7 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             break;
 
         case OFPACT_METER:
-            /* Not implemented yet. */
+            xlate_meter_action(ctx, ofpact_get_METER(a));
             break;
 
         case OFPACT_GOTO_TABLE: {
