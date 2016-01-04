@@ -97,7 +97,7 @@ parse_options(int argc, char *argv[])
         MC_LONG_OPTIONS,
         {NULL, 0, NULL, 0},
     };
-    char *short_options = long_options_to_short_options(long_options);
+    char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
     struct mc_options *mc_options = mc_options_create();
     for (;;) {
         int c;
