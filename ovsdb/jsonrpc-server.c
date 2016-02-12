@@ -103,6 +103,7 @@ struct ovsdb_jsonrpc_server {
     struct ovsdb_server up;
     unsigned int n_sessions;
     struct shash remotes;      /* Contains "struct ovsdb_jsonrpc_remote *"s. */
+    int epoll_fd;              /* Use epoll() API on Linux if epoll_fd != 0. */
 };
 
 /* A configured remote.  This is either a passive stream listener plus a list
@@ -124,13 +125,21 @@ static void ovsdb_jsonrpc_server_del_remote(struct shash_node *);
 /* Creates and returns a new server to provide JSON-RPC access to an OVSDB.
  *
  * The caller must call ovsdb_jsonrpc_server_add_db() for each database to
- * which 'server' should provide access. */
+ * which 'server' should provide access.
+ *
+ * On platforms where epoll() is support, using epoll() can be more
+ * efficient than using poll().  To enable using epoll(), 'epoll_fd'
+ * should be non-zero value, returned from epoll_create() call.
+ * On the other hand, when 'epoll_fd' is set to zero, jsonrpc server
+ * falls back to use the poll() API.
+ */
 struct ovsdb_jsonrpc_server *
-ovsdb_jsonrpc_server_create(void)
+ovsdb_jsonrpc_server_create(int epoll_fd)
 {
     struct ovsdb_jsonrpc_server *server = xzalloc(sizeof *server);
     ovsdb_server_init(&server->up);
     shash_init(&server->remotes);
+    epoll_fd = epoll_fd;
     return server;
 }
 
