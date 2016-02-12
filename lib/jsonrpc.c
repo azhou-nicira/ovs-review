@@ -760,6 +760,7 @@ struct jsonrpc_session {
     int last_error;
     unsigned int seqno;
     uint8_t dscp;
+    int epoll_fd;
 };
 
 /* Creates and returns a jsonrpc_session to 'name', which should be a string
@@ -791,6 +792,7 @@ jsonrpc_session_open(const char *name, bool retry)
     s->seqno = 0;
     s->dscp = 0;
     s->last_error = 0;
+    s->epoll_fd = 0;
 
     if (!pstream_verify_name(name)) {
         reconnect_set_passive(s->reconnect, true, time_msec());
@@ -812,7 +814,8 @@ jsonrpc_session_open(const char *name, bool retry)
  * On the assumption that such connections are likely to be short-lived
  * (e.g. from ovs-vsctl), informational logging for them is suppressed. */
 struct jsonrpc_session *
-jsonrpc_session_open_unreliably(struct jsonrpc *jsonrpc, uint8_t dscp)
+jsonrpc_session_open_unreliably(struct jsonrpc *jsonrpc, uint8_t dscp,
+                                int epoll_fd)
 {
     struct jsonrpc_session *s;
 
@@ -827,6 +830,7 @@ jsonrpc_session_open_unreliably(struct jsonrpc *jsonrpc, uint8_t dscp)
     s->stream = NULL;
     s->pstream = NULL;
     s->seqno = 0;
+    s->epoll_fd = epoll_fd;
 
     return s;
 }
