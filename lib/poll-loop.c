@@ -45,9 +45,20 @@ struct poll_node {
     const char *where;          /* Where poll_node was created. */
 };
 
+struct fd_node {
+    struct hmap_node hmap_node;
+    int fd;
+    HANDLE wevent;
+    struct poll_group *poll_group;
+    const void *caller_event;
+};
+
 struct poll_loop {
     /* All active poll waiters. */
     struct hmap poll_nodes;
+
+    /* Look up user event from an fd. */
+    struct hmap fd_nodes;
 
     /* Time at which to wake up the next call to poll_block(), LLONG_MIN to
      * wake up immediately, or LLONG_MAX to wait forever. */
@@ -389,6 +400,44 @@ poll_block(void)
 
     seq_woke();
 }
+
+
+
+static struct fd_node *poll_fd_find_node(struct poll_loop *, int fd,
+                                              HANDLE wevent);
+
+static void poll_fd_create_node(struct poll_loop *, int fd, HANDLE wevent,
+                                struct poll_group *group,
+                                const void *caller_event);
+
+int
+poll_fd_register(int fd, struct poll_group *group,
+                 const void *caller_event)
+{
+     struct poll_loop *loop = poll_loop();
+     struct fd_node *node = poll_fd_find_node(loop, fd, 0);
+
+     if (!node) {
+        poll_fd_create_node(loop, fd, 0, group, caller_event);
+     }
+
+     return node ? -1 : 0;
+}
+
+int
+poll_fd_unregister(int fd)
+{
+     struct poll_loop *loop = poll_loop();
+     struct fd_node *node = poll_fd_find_node(loop, fd, 0);
+
+     if (node) {
+        hmap_remove(&loop->fd_nodes, &node->hmap_node);
+        free(node);
+     }
+
+     return node ? 0 : -1;
+}
+
 
 static void
 free_poll_loop(void *loop_)
@@ -397,6 +446,7 @@ free_poll_loop(void *loop_)
 
     free_poll_nodes(loop);
     hmap_destroy(&loop->poll_nodes);
+    hmap_destroy(&loop->fd_nodes);
     free(loop);
 }
 
@@ -416,8 +466,46 @@ poll_loop(void)
     if (!loop) {
         loop = xzalloc(sizeof *loop);
         hmap_init(&loop->poll_nodes);
+        hmap_init(&loop->fd_nodes);
         xpthread_setspecific(key, loop);
     }
     return loop;
 }
 
+/* Look up the fd node within fd_nodes mapt. */
+static struct fd_node *
+poll_fd_find_node(struct poll_loop *loop, int fd, HANDLE wevent)
+{
+    struct fd_node *node;
+
+    /* Both 'fd' and 'wevent' cannot be set. */
+    ovs_assert(!fd != !wevent);
+
+    HMAP_FOR_EACH_WITH_HASH (node, hmap_node,
+                             hash_2words(fd, (uint32_t)wevent),
+                             &loop->poll_nodes) {
+        if ((fd && node->fd == fd)
+            || (wevent && node->wevent == wevent)) {
+            return node;
+        }
+    }
+    return NULL;
+}
+
+static void
+poll_fd_create_node(struct poll_loop *loop , int fd, HANDLE wevent,
+                    struct poll_group *group, const void *caller_event)
+{
+    struct fd_node *node;
+
+    /* Both 'fd' and 'wevent' cannot be set. */
+    ovs_assert(!fd != !wevent);
+
+    node = xmalloc(sizeof *node);
+    hmap_insert(&loop->fd_nodes, &node->hmap_node,
+                hash_2words(fd, (uint32_t)wevent));
+    node->fd = fd;
+    node->wevent = wevent;
+    node->poll_group = group;
+    node->caller_event = caller_event;
+}

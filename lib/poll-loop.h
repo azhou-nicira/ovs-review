@@ -40,6 +40,7 @@
 extern "C" {
 #endif
 
+struct poll_group;
 
 /* Schedule events to wake up the following poll_block().
  *
@@ -52,6 +53,13 @@ extern "C" {
  * example. */
 void poll_fd_wait_at(int fd, short int events, const char *where);
 #define poll_fd_wait(fd, events) poll_fd_wait_at(fd, events, OVS_SOURCE_LOCATOR)
+
+/* Fd association */
+/* Associate a caller event with the an 'fd' .  */
+int poll_fd_register(int fd, struct poll_group *group,
+                      const void *caller_event);
+/* Forget about the caller event associated with the 'fd'. */
+int poll_fd_unregister(int fd);
 
 #ifdef _WIN32
 #define poll_wevent_wait(wevent) poll_wevent_wait_at(wevent, OVS_SOURCE_LOCATOR)
