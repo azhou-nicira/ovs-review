@@ -339,7 +339,8 @@ ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *svr)
             if (!error) {
                 struct jsonrpc_session *js;
                 js = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
-                                                     remote->dscp);
+                                                     remote->dscp,
+                                                     svr->epoll_fd);
                 ovsdb_jsonrpc_session_create(remote, js);
             } else if (error != EAGAIN) {
                 VLOG_WARN_RL(&rl, "%s: accept failed: %s",
