@@ -277,6 +277,17 @@ ordinals
 ])
 AT_CLEANUP
 
+AT_SETUP([ovsdb-server with --disable-epoll])
+AT_KEYWORDS([ovsdb server positive])
+AT_SKIP_IF([test "$IS_WIN32" = "yes"])
+# Start ovsdb-server, initially with one db, not using epoll poll group
+ordinal_schema > schema
+AT_CHECK([ovsdb-tool create db1 schema], [0], [ignore], [ignore])
+on_exit 'kill `cat *.pid`'
+AT_CHECK([ovsdb-server --detach --no-chdir --pidfile --disable-epoll --remote=punix:socket db1], [0])
+AT_CHECK([ovsdb-client list-dbs unix:socket] , [0], [ignore], [ignore])
+AT_CLEANUP
+
 AT_SETUP([ovsdb-server/add-db and remove-db with --monitor])
 AT_KEYWORDS([ovsdb server positive])
 AT_SKIP_IF([test "$IS_WIN32" = "yes"])

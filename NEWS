@@ -17,7 +17,10 @@ Post-v2.5.0
    - ovsdb-server:
      * Remove max number of sessions limit, to enable connection scaling
        testing.
-
+   - ovsdb-server:
+     * On Linux, ovsdb server uses poll group, which uses epoll(7) to
+       improve connection scaling. Add an undocumented --disable-epoll
+       switch for testing.
 
 v2.5.0 - xx xxx xxxx
 ---------------------

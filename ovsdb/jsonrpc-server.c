@@ -28,6 +28,7 @@
 #include "ovsdb-error.h"
 #include "ovsdb-parser.h"
 #include "ovsdb.h"
+#include "poll-group.h"
 #include "poll-loop.h"
 #include "reconnect.h"
 #include "row.h"
@@ -103,7 +104,10 @@ struct ovsdb_jsonrpc_server {
     struct ovsdb_server up;
     unsigned int n_sessions;
     struct shash remotes;      /* Contains "struct ovsdb_jsonrpc_remote *"s. */
+    struct poll_group *poll_group;   /* group poll jsonrpc sessions.  */
 };
+
+static void ovsdb_jsonrpc_server_run_poll_group(struct poll_group *);
 
 /* A configured remote.  This is either a passive stream listener plus a list
  * of the currently connected sessions, or a list of exactly one active
@@ -124,13 +128,24 @@ static void ovsdb_jsonrpc_server_del_remote(struct shash_node *);
 /* Creates and returns a new server to provide JSON-RPC access to an OVSDB.
  *
  * The caller must call ovsdb_jsonrpc_server_add_db() for each database to
- * which 'server' should provide access. */
+ * which 'server' should provide access.
+ *
+ * On platforms where epoll() is supported, using epoll() can be more
+ * efficient than using poll(), and it will be enabled by default.
+ * To disable it, set 'disable_epoll to false.
+ */
 struct ovsdb_jsonrpc_server *
-ovsdb_jsonrpc_server_create(void)
+ovsdb_jsonrpc_server_create(bool disable_epoll)
 {
     struct ovsdb_jsonrpc_server *server = xzalloc(sizeof *server);
+    struct poll_group *poll_group = NULL;
+
     ovsdb_server_init(&server->up);
     shash_init(&server->remotes);
+    if (!disable_epoll) {
+        poll_group = poll_group_create("jsonrpc-sessions-pg");
+    }
+    server->poll_group = poll_group;
     return server;
 }
 
@@ -318,6 +333,7 @@ void
 ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *svr)
 {
     struct shash_node *node;
+    struct poll_group *poll_group = svr->poll_group;
 
     SHASH_FOR_EACH (node, &svr->remotes) {
         struct ovsdb_jsonrpc_remote *remote = node->data;
@@ -329,10 +345,13 @@ ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *svr)
             error = pstream_accept(remote->listener, &stream);
             if (!error) {
                 struct jsonrpc_session *js;
+                struct ovsdb_jsonrpc_session *ovsdb_js;
                 js = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
                                                      remote->dscp);
-                ovsdb_jsonrpc_session_create(remote, js);
-            } else if (error != EAGAIN) {
+                ovsdb_js = ovsdb_jsonrpc_session_create(remote, js);
+                stream_join(stream, svr->poll_group, ovsdb_js);
+            }
+            else if (error != EAGAIN) {
                 VLOG_WARN_RL(&rl, "%s: accept failed: %s",
                              pstream_get_name(remote->listener),
                              ovs_strerror(error));
@@ -341,11 +360,16 @@ ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *svr)
 
         ovsdb_jsonrpc_session_run_all(remote);
     }
+
+    if (poll_group) {
+        ovsdb_jsonrpc_server_run_poll_group(poll_group);
+    }
 }
 
 void
 ovsdb_jsonrpc_server_wait(struct ovsdb_jsonrpc_server *svr)
 {
+    struct poll_group *poll_group = svr->poll_group;
     struct shash_node *node;
 
     SHASH_FOR_EACH (node, &svr->remotes) {
@@ -357,6 +381,7 @@ ovsdb_jsonrpc_server_wait(struct ovsdb_jsonrpc_server *svr)
 
         ovsdb_jsonrpc_session_wait_all(remote);
     }
+    poll_group_poll_wait(poll_group);
 }
 
 /* Adds some memory usage statistics for 'svr' into 'usage', for use with
@@ -491,6 +516,27 @@ ovsdb_jsonrpc_session_run_all(struct ovsdb_jsonrpc_remote *remote)
     struct ovsdb_jsonrpc_session *s, *next;
 
     LIST_FOR_EACH_SAFE (s, next, node, &remote->sessions) {
+        if (poll_block_waken_by_timer() ||
+            !jsonrpc_session_joined_poll_group(s->js)) {
+            int error = ovsdb_jsonrpc_session_run(s);
+            if (error) {
+                ovsdb_jsonrpc_session_close(s);
+            }
+        }
+    }
+}
+
+static void
+ovsdb_jsonrpc_server_run_poll_group(struct poll_group *group)
+{
+    void **sessions;
+    size_t n, i;
+
+    poll_group_get_events(group, &sessions, &n);
+
+    for (i = 0; i < n; i++) {
+        struct ovsdb_jsonrpc_session *s;
+        s = sessions[i];
         int error = ovsdb_jsonrpc_session_run(s);
         if (error) {
             ovsdb_jsonrpc_session_close(s);
@@ -499,9 +545,19 @@ ovsdb_jsonrpc_session_run_all(struct ovsdb_jsonrpc_remote *remote)
 }
 
 static void
+ovsdb_jsonrpc_session_poll_group_update(struct ovsdb_jsonrpc_session *s)
+{
+    if (ovsdb_jsonrpc_monitor_needs_flush(s) ||
+        jsonrpc_session_get_backlog(s->js) ||
+        jsonrpc_session_has_pending_input(s->js)) {
+
+        jsonrpc_session_poll_group_update(s->js, true);
+    }
+}
+
+static void
 ovsdb_jsonrpc_session_wait(struct ovsdb_jsonrpc_session *s)
 {
-    jsonrpc_session_wait(s->js);
     if (!jsonrpc_session_get_backlog(s->js)) {
         if (ovsdb_jsonrpc_monitor_needs_flush(s)) {
             poll_immediate_wake();
@@ -517,7 +573,14 @@ ovsdb_jsonrpc_session_wait_all(struct ovsdb_jsonrpc_remote *remote)
     struct ovsdb_jsonrpc_session *s;
 
     LIST_FOR_EACH (s, node, &remote->sessions) {
-        ovsdb_jsonrpc_session_wait(s);
+        jsonrpc_session_wait(s->js);
+
+        bool update_pg = jsonrpc_session_joined_poll_group(s->js);
+        if (update_pg) {
+            ovsdb_jsonrpc_session_poll_group_update(s);
+        } else {
+            ovsdb_jsonrpc_session_wait(s);
+        }
     }
 }
 
