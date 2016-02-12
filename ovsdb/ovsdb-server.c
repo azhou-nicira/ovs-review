@@ -87,6 +87,7 @@ struct server_config {
     struct shash *all_dbs;
     FILE *config_tmpfile;
     struct ovsdb_jsonrpc_server *jsonrpc;
+    bool disable_epoll;
 };
 static unixctl_cb_func ovsdb_server_add_remote;
 static unixctl_cb_func ovsdb_server_remove_remote;
@@ -101,7 +102,7 @@ static void close_db(struct db *db);
 
 static void parse_options(int *argc, char **argvp[],
                           struct sset *remotes, char **unixctl_pathp,
-                          char **run_command);
+                          char **run_command, bool *disable_epoll);
 OVS_NO_RETURN static void usage(void);
 
 static char *reconfigure_remotes(struct ovsdb_jsonrpc_server *,
@@ -115,10 +116,11 @@ static void update_remote_status(const struct ovsdb_jsonrpc_server *jsonrpc,
                                  struct shash *all_dbs);
 
 static void save_config__(FILE *config_file, const struct sset *remotes,
-                          const struct sset *db_filenames);
+                          const struct sset *db_filenames,
+                          const bool disable_epoll);
 static void save_config(struct server_config *);
 static void load_config(FILE *config_file, struct sset *remotes,
-                        struct sset *db_filenames);
+                        struct sset *db_filenames, bool *disable_epoll);
 
 static void
 main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
@@ -203,6 +205,7 @@ main(int argc, char *argv[])
 {
     char *unixctl_path = NULL;
     char *run_command = NULL;
+    bool disable_epoll = false;  /* Use epoll() by default.  */
     struct unixctl_server *unixctl;
     struct ovsdb_jsonrpc_server *jsonrpc;
     struct sset remotes, db_filenames;
@@ -223,7 +226,8 @@ main(int argc, char *argv[])
     fatal_ignore_sigpipe();
     process_init();
 
-    parse_options(&argc, &argv, &remotes, &unixctl_path, &run_command);
+    parse_options(&argc, &argv, &remotes, &unixctl_path, &run_command,
+                  &disable_epoll);
     daemon_become_new_user(false);
 
     /* Create and initialize 'config_tmpfile' as a temporary file to hold
@@ -247,16 +251,17 @@ main(int argc, char *argv[])
         free(default_db);
     }
 
+    server_config.disable_epoll = disable_epoll;
     server_config.remotes = &remotes;
     server_config.config_tmpfile = config_tmpfile;
 
-    save_config__(config_tmpfile, &remotes, &db_filenames);
+    save_config__(config_tmpfile, &remotes, &db_filenames, disable_epoll);
 
     daemonize_start(false);
 
     /* Load the saved config. */
-    load_config(config_tmpfile, &remotes, &db_filenames);
-    jsonrpc = ovsdb_jsonrpc_server_create();
+    load_config(config_tmpfile, &remotes, &db_filenames, &disable_epoll);
+    jsonrpc = ovsdb_jsonrpc_server_create(disable_epoll);
 
     shash_init(&all_dbs);
     server_config.all_dbs = &all_dbs;
@@ -1270,12 +1275,14 @@ ovsdb_server_list_databases(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
 static void
 parse_options(int *argcp, char **argvp[],
-              struct sset *remotes, char **unixctl_pathp, char **run_command)
+              struct sset *remotes, char **unixctl_pathp, char **run_command,
+              bool *disable_epoll)
 {
     enum {
         OPT_REMOTE = UCHAR_MAX + 1,
         OPT_UNIXCTL,
         OPT_RUN,
+        OPT_DISABLE_EPOLL,
         OPT_BOOTSTRAP_CA_CERT,
         OPT_PEER_CA_CERT,
         VLOG_OPTION_ENUMS,
@@ -1284,6 +1291,7 @@ parse_options(int *argcp, char **argvp[],
     static const struct option long_options[] = {
         {"remote",      required_argument, NULL, OPT_REMOTE},
         {"unixctl",     required_argument, NULL, OPT_UNIXCTL},
+        {"disable-epoll", no_argument, NULL, OPT_DISABLE_EPOLL},
 #ifndef _WIN32
         {"run",         required_argument, NULL, OPT_RUN},
 #endif
@@ -1301,6 +1309,7 @@ parse_options(int *argcp, char **argvp[],
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
     int argc = *argcp;
     char **argv = *argvp;
+    bool disable_epoll_ = false;
 
     sset_init(remotes);
     for (;;) {
@@ -1322,6 +1331,10 @@ parse_options(int *argcp, char **argvp[],
 
         case OPT_RUN:
             *run_command = optarg;
+            break;
+
+        case OPT_DISABLE_EPOLL:
+            disable_epoll_ = true;
             break;
 
         case 'h':
@@ -1363,6 +1376,8 @@ parse_options(int *argcp, char **argvp[],
             abort();
         }
     }
+
+    *disable_epoll = disable_epoll_;
     free(short_options);
 
     *argcp -= optind;
@@ -1407,7 +1422,7 @@ sset_to_json(const struct sset *sset)
  * 'remotes' and 'db_filenames'. */
 static void
 save_config__(FILE *config_file, const struct sset *remotes,
-              const struct sset *db_filenames)
+              const struct sset *db_filenames, bool disable_epoll)
 {
     struct json *obj;
     char *s;
@@ -1420,6 +1435,7 @@ save_config__(FILE *config_file, const struct sset *remotes,
     obj = json_object_create();
     json_object_put(obj, "remotes", sset_to_json(remotes));
     json_object_put(obj, "db_filenames", sset_to_json(db_filenames));
+    json_object_put(obj, "disable_epoll", json_boolean_create(disable_epoll));
     s = json_to_string(obj, 0);
     json_destroy(obj);
 
@@ -1445,7 +1461,8 @@ save_config(struct server_config *config)
         sset_add(&db_filenames, db->filename);
     }
 
-    save_config__(config->config_tmpfile, config->remotes, &db_filenames);
+    save_config__(config->config_tmpfile, config->remotes, &db_filenames,
+                  config->disable_epoll);
 
     sset_destroy(&db_filenames);
 }
@@ -1467,7 +1484,8 @@ sset_from_json(struct sset *sset, const struct json *array)
 /* Clears and replaces 'remotes' and 'dbnames' by a configuration read from
  * 'config_file', which must have been previously written by save_config(). */
 static void
-load_config(FILE *config_file, struct sset *remotes, struct sset *db_filenames)
+load_config(FILE *config_file, struct sset *remotes,
+            struct sset *db_filenames, bool *disable_epoll)
 {
     struct json *json;
 
@@ -1483,5 +1501,8 @@ load_config(FILE *config_file, struct sset *remotes, struct sset *db_filenames)
     sset_from_json(remotes, shash_find_data(json_object(json), "remotes"));
     sset_from_json(db_filenames,
                    shash_find_data(json_object(json), "db_filenames"));
+    bool b = json_boolean(shash_find_data(json_object(json), "disable_epoll"));
+    *disable_epoll = b;
+
     json_destroy(json);
 }

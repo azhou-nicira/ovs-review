@@ -23,7 +23,7 @@ struct ovsdb;
 struct shash;
 struct simap;
 
-struct ovsdb_jsonrpc_server *ovsdb_jsonrpc_server_create(void);
+struct ovsdb_jsonrpc_server *ovsdb_jsonrpc_server_create(bool);
 bool ovsdb_jsonrpc_server_add_db(struct ovsdb_jsonrpc_server *,
                                  struct ovsdb *);
 bool ovsdb_jsonrpc_server_remove_db(struct ovsdb_jsonrpc_server *,
