@@ -33,11 +33,29 @@ VLOG_DEFINE_THIS_MODULE(poll_group);
 /* Helper functions */
 static void add_caller_event(struct poll_group *group, void *caller_event);
 
+static const struct poll_group_class *poll_group_classes[] = {
+    &poll_group_default_class,
+};
+
 
 static const struct poll_group_class *
-poll_group_select_class(const char *class_name OVS_UNUSED, size_t len OVS_UNUSED)
+poll_group_select_class(const char *class_name, size_t len)
 {
-    /* Nothing has being impemented yet. */
+    size_t i;
+
+    if (len == 0) {
+        class_name = "default";
+        len = strlen(class_name);
+    }
+
+    for (i = 0; i< ARRAY_SIZE(poll_group_classes); i++) {
+        const struct poll_group_class *class = poll_group_classes[i];
+        if (strlen(class->name) == len &&
+            !memcmp(class->name, class_name, len)) {
+            return class;
+        }
+    }
+
     return NULL;
 }
 

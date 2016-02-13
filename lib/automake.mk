@@ -200,6 +200,7 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/poll-group.c \
 	lib/poll-group.h \
 	lib/poll-group-provider.h \
+	lib/poll-group-default.c \
 	lib/poll-loop.c \
 	lib/poll-loop.h \
 	lib/process.c \

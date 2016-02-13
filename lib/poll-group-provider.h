@@ -78,4 +78,7 @@ void poll_group_init(struct poll_group *, const char *name,
 
 extern const struct poll_group_class poll_group_default_class;
 
+
+extern const struct poll_group_class poll_group_default_class;
+
 #endif /* poll-group-provider.h */
