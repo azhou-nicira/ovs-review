@@ -40,6 +40,7 @@
 #include "ovsdb-data.h"
 #include "ovsdb-types.h"
 #include "ovsdb-error.h"
+#include "poll-group.h"
 #include "poll-loop.h"
 #include "process.h"
 #include "row.h"
