@@ -197,6 +197,9 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/perf-counter.c \
 	lib/pktbuf.c \
 	lib/pktbuf.h \
+	lib/poll-group.c \
+	lib/poll-group.h \
+	lib/poll-group-provider.h \
 	lib/poll-loop.c \
 	lib/poll-loop.h \
 	lib/process.c \
