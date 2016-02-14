@@ -20,6 +20,7 @@
 #include <sys/types.h>
 #include "stream.h"
 
+struct poll_group;
 /* Active stream connection. */
 
 /* Active stream connection.
@@ -30,6 +31,11 @@ struct stream {
     int state;
     int error;
     char *name;
+
+    /* poll_group related states.  */
+    struct poll_group *poll_group;
+    void *caller_event;
+    bool joined;
 };
 
 void stream_init(struct stream *, const struct stream_class *,
@@ -123,6 +129,17 @@ struct stream_class {
     /* Arranges for the poll loop to wake up when 'stream' is ready to take an
      * action of the given 'type'. */
     void (*wait)(struct stream *stream, enum stream_wait_type type);
+
+    /* Arranges for 'stream' to join poll group when it is connected. */
+    int (*join)(struct stream *stream);
+
+    /* Let 'stream' inform pull group about its interest to be waken up
+     * by tx_ready.  */
+    int (*update)(struct stream *stream, bool write);
+
+    /* Disconnects stream from poll group. A disconnected stream will fall
+     * back to use poll loop directly.   */
+    int (*leave)(struct stream *stream);
 };
 
 /* Passive listener for incoming stream connections.

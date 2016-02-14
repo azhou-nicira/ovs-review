@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2015 Nicira, Inc.
+ * Copyright (c) 2008, 2009, 2010, 2011, 2012, 2013, 2015, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #include <inttypes.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <poll-group.h>
 #include <stdlib.h>
 #include <string.h>
 #include "coverage.h"
@@ -187,6 +188,23 @@ stream_lookup_class(const char *name, const struct stream_class **classp)
     return EAFNOSUPPORT;
 }
 
+/* Helper function that is called when a stream's state transit from
+ * SCS_CONNECTING to SCS_CONNECTED state */
+static void
+stream_join_poll_group(struct stream *stream)
+{
+    if (stream->poll_group && stream->caller_event && !stream->joined) {
+        int ret = stream->class->join(stream);
+        if (ret) {
+            VLOG_ERR("Stream [%s] failed to join poll_group [%s]\n",
+                     stream_get_name(stream),
+                     poll_group_get_name(stream->poll_group));
+        } else {
+            stream->joined = true;
+        }
+    }
+}
+
 /* Returns 0 if 'name' is a stream name in the form "TYPE:ARGS" and TYPE is
  * a supported stream type, otherwise EAFNOSUPPORT.  */
 int
@@ -278,6 +296,7 @@ stream_close(struct stream *stream)
 {
     if (stream != NULL) {
         char *name = stream->name;
+        stream_leave(stream);
         (stream->class->close)(stream);
         free(name);
     }
@@ -317,13 +336,16 @@ stream_connect(struct stream *stream)
         last_state = stream->state;
         switch (stream->state) {
         case SCS_CONNECTING:
+            stream_leave(stream);
             scs_connecting(stream);
             break;
 
         case SCS_CONNECTED:
+            stream_join_poll_group(stream);
             return 0;
 
         case SCS_DISCONNECTED:
+            stream_leave(stream);
             return stream->error;
 
         default:
@@ -428,6 +450,62 @@ void
 stream_send_wait(struct stream *stream)
 {
     stream_wait(stream, STREAM_SEND);
+}
+
+int
+stream_join(struct stream *stream, struct poll_group *group, void *caller_event)
+{
+    if (stream->poll_group || stream->caller_event || stream->joined) {
+        return 1;
+    }
+
+    if (!stream->class->join || !stream->class->update
+        ||!stream->class->leave) {
+        return 1;
+    }
+
+    stream->poll_group = group;
+    stream->caller_event= caller_event;
+
+    if (stream->state == SCS_CONNECTED) {
+        stream_join_poll_group(stream);
+    }
+
+    return 0;
+}
+
+int
+stream_update(struct stream *stream, bool write)
+{
+    int ret;
+
+    if (!stream->poll_group) {
+        return 1;
+    }
+
+    ret = stream->class->update(stream, write);
+
+    return ret;
+}
+
+int
+stream_leave(struct stream *stream)
+{
+    int ret = 0;
+
+    if (stream->poll_group && stream->joined) {
+       ret = stream->class->leave(stream);
+       stream->joined = false;
+    }
+
+    return ret;
+}
+
+/* Report if a stream is a member of a polll group. */
+bool
+stream_joined(struct stream *stream)
+{
+    return stream->joined;
 }
 
 /* Given 'name', a pstream name in the form "TYPE:ARGS", stores the class
@@ -628,6 +706,9 @@ stream_init(struct stream *stream, const struct stream_class *class,
                     : SCS_DISCONNECTED);
     stream->error = connect_status;
     stream->name = xstrdup(name);
+    stream->poll_group = NULL;
+    stream->caller_event = NULL;
+    stream->joined = false;
     ovs_assert(stream->state != SCS_CONNECTING || class->connect);
 }
 
