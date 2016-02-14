@@ -747,6 +747,27 @@ ssl_wait(struct stream *stream, enum stream_wait_type wait)
     }
 }
 
+static char *
+ssl_join(struct stream *stream)
+{
+   /* XXX */
+   return NULL;
+}
+
+static char *
+ssl_update(struct stream *stream, bool write)
+{
+   /* XXX */
+   return NULL;
+}
+
+static char *
+ssl_leave(struct stream *stream,)
+{
+   /* XXX */
+   return NULL;
+}
+
 const struct stream_class ssl_stream_class = {
     "ssl",                      /* name */
     true,                       /* needs_probes */
@@ -758,6 +779,9 @@ const struct stream_class ssl_stream_class = {
     ssl_run,                    /* run */
     ssl_run_wait,               /* run_wait */
     ssl_wait,                   /* wait */
+    ssl_join,                   /* join */
+    ssl_update,                 /* update */
+    ssl_leave,                  /* leave */
 };
 
 /* Passive SSL. */

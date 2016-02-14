@@ -28,6 +28,7 @@
 #include "socket-util.h"
 #include "util.h"
 #include "stream-provider.h"
+#include "poll-group.h"
 #include "stream.h"
 #include "openvswitch/vlog.h"
 
@@ -160,6 +161,34 @@ fd_wait(struct stream *stream, enum stream_wait_type wait)
     }
 }
 
+static int
+fd_join(struct stream *stream)
+{
+    struct stream_fd *s = stream_fd_cast(stream);
+    struct poll_group *group = stream->poll_group;
+    void *caller_event = stream->caller_event;
+
+    return poll_group_join(group, s->fd, caller_event);
+}
+
+static int
+fd_update(struct stream *stream, bool write)
+{
+    struct stream_fd *s = stream_fd_cast(stream);
+    struct poll_group *group = stream->poll_group;
+
+    return poll_group_update(group, s->fd, write);
+}
+
+static int
+fd_leave(struct stream *stream)
+{
+    struct stream_fd *s = stream_fd_cast(stream);
+    struct poll_group *group = stream->poll_group;
+
+    return poll_group_leave(group, s->fd);
+}
+
 static const struct stream_class stream_fd_class = {
     "fd",                       /* name */
     false,                      /* needs_probes */
@@ -171,6 +200,9 @@ static const struct stream_class stream_fd_class = {
     NULL,                       /* run */
     NULL,                       /* run_wait */
     fd_wait,                    /* wait */
+    fd_join,                    /* join */
+    fd_update,                  /* update */
+    fd_leave,                   /* leave */
 };
 
 /* Passive file descriptor stream. */

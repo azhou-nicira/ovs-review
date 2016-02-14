@@ -298,6 +298,13 @@ scs_connecting(struct stream *stream)
     ovs_assert(retval != EINPROGRESS);
     if (!retval) {
         stream->state = SCS_CONNECTED;
+        if (stream->poll_group && stream->caller_event) {
+            int ret = stream->class->join(stream);
+            if (!ret) {
+                /* XXX better error message */
+                VLOG_FATAL("Failed to join poll_group,\n");
+            }
+        }
     } else if (retval != EAGAIN) {
         stream->state = SCS_DISCONNECTED;
         stream->error = retval;
@@ -428,6 +435,53 @@ void
 stream_send_wait(struct stream *stream)
 {
     stream_wait(stream, STREAM_SEND);
+}
+
+int
+stream_join(struct stream *stream, struct poll_group *group, void *caller_event)
+{
+    if (stream->poll_group || stream->caller_event) {
+        return 1;
+    }
+
+    if (!stream->class->join || !stream->class->update
+        ||!stream->class->leave) {
+        return 1;
+    }
+
+    stream->poll_group = group;
+    stream->caller_event= caller_event;
+
+    if (stream->state == SCS_CONNECTED) {
+        return stream->class->join(stream);
+    }
+
+    return 0;
+}
+
+int
+stream_update(struct stream *stream, bool write)
+{
+    if (!stream->poll_group) {
+        return 1;
+    }
+
+    return stream->class->update(stream, write);
+}
+
+int
+stream_leave(struct stream *stream)
+{
+    int ret;
+
+    if (!stream->poll_group) {
+        return 1;
+    }
+
+    ret = stream->class->leave(stream);
+    stream->poll_group = NULL;
+
+    return ret;
 }
 
 /* Given 'name', a pstream name in the form "TYPE:ARGS", stores the class
@@ -628,6 +682,8 @@ stream_init(struct stream *stream, const struct stream_class *class,
                     : SCS_DISCONNECTED);
     stream->error = connect_status;
     stream->name = xstrdup(name);
+    stream->poll_group = NULL;
+    stream->caller_event = NULL;
     ovs_assert(stream->state != SCS_CONNECTING || class->connect);
 }
 

@@ -20,6 +20,7 @@
 #include <sys/types.h>
 #include "stream.h"
 
+struct poll_group;
 /* Active stream connection. */
 
 /* Active stream connection.
@@ -30,6 +31,8 @@ struct stream {
     int state;
     int error;
     char *name;
+    struct poll_group *poll_group;
+    void *caller_event;
 };
 
 void stream_init(struct stream *, const struct stream_class *,
@@ -123,6 +126,11 @@ struct stream_class {
     /* Arranges for the poll loop to wake up when 'stream' is ready to take an
      * action of the given 'type'. */
     void (*wait)(struct stream *stream, enum stream_wait_type type);
+
+    /* A new pull group interface */
+    int (*join)(struct stream *stream);
+    int (*update)(struct stream *stream, bool write);
+    int (*leave)(struct stream *stream);
 };
 
 /* Passive listener for incoming stream connections.
