@@ -29,6 +29,7 @@ struct jsonrpc_msg;
 struct pstream;
 struct reconnect_stats;
 struct stream;
+struct poll_group;
 
 /* API for a JSON-RPC stream. */
 
@@ -100,7 +101,8 @@ struct json *jsonrpc_msg_to_json(struct jsonrpc_msg *);
 
 struct jsonrpc_session *jsonrpc_session_open(const char *name, bool retry);
 struct jsonrpc_session *jsonrpc_session_open_unreliably(struct jsonrpc *,
-                                                        uint8_t, int epoll_fd);
+                                                        uint8_t,
+                                                        struct poll_group *);
 void jsonrpc_session_close(struct jsonrpc_session *);
 
 void jsonrpc_session_run(struct jsonrpc_session *);

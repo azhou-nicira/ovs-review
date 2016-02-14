@@ -760,7 +760,7 @@ struct jsonrpc_session {
     int last_error;
     unsigned int seqno;
     uint8_t dscp;
-    int epoll_fd;
+    struct poll_group *jsonrpc_poll_group;
 };
 
 /* Creates and returns a jsonrpc_session to 'name', which should be a string
@@ -792,7 +792,7 @@ jsonrpc_session_open(const char *name, bool retry)
     s->seqno = 0;
     s->dscp = 0;
     s->last_error = 0;
-    s->epoll_fd = 0;
+    s->jsonrpc_poll_group = NULL;
 
     if (!pstream_verify_name(name)) {
         reconnect_set_passive(s->reconnect, true, time_msec());
@@ -815,7 +815,7 @@ jsonrpc_session_open(const char *name, bool retry)
  * (e.g. from ovs-vsctl), informational logging for them is suppressed. */
 struct jsonrpc_session *
 jsonrpc_session_open_unreliably(struct jsonrpc *jsonrpc, uint8_t dscp,
-                                int epoll_fd)
+                                struct poll_group * jsonrpc_poll_group)
 {
     struct jsonrpc_session *s;
 
@@ -830,7 +830,7 @@ jsonrpc_session_open_unreliably(struct jsonrpc *jsonrpc, uint8_t dscp,
     s->stream = NULL;
     s->pstream = NULL;
     s->seqno = 0;
-    s->epoll_fd = epoll_fd;
+    s->jsonrpc_poll_group = jsonrpc_poll_group;
 
     return s;
 }
@@ -873,6 +873,9 @@ jsonrpc_session_connect(struct jsonrpc_session *s)
         error = jsonrpc_stream_open(name, &s->stream, s->dscp);
         if (!error) {
             reconnect_connecting(s->reconnect, time_msec());
+            if (s->jsonrpc_poll_group) {
+                stream_join(s->stream, s->jsonrpc_poll_group, s);
+            }
         } else {
             s->last_error = error;
         }

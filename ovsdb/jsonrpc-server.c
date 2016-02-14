@@ -134,12 +134,11 @@ static void ovsdb_jsonrpc_server_del_remote(struct shash_node *);
  * falls back to use the poll() API.
  */
 struct ovsdb_jsonrpc_server *
-ovsdb_jsonrpc_server_create(int epoll_fd)
+ovsdb_jsonrpc_server_create(int epoll_fd OVS_UNUSED)
 {
     struct ovsdb_jsonrpc_server *server = xzalloc(sizeof *server);
     ovsdb_server_init(&server->up);
     shash_init(&server->remotes);
-    epoll_fd = epoll_fd;
     return server;
 }
 
@@ -340,7 +339,7 @@ ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *svr)
                 struct jsonrpc_session *js;
                 js = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
                                                      remote->dscp,
-                                                     svr->epoll_fd);
+                                                     NULL);
                 ovsdb_jsonrpc_session_create(remote, js);
             } else if (error != EAGAIN) {
                 VLOG_WARN_RL(&rl, "%s: accept failed: %s",
