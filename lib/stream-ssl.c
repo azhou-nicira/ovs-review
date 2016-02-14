@@ -38,6 +38,7 @@
 #include "ofpbuf.h"
 #include "openflow/openflow.h"
 #include "packets.h"
+#include "poll-group.h"
 #include "poll-loop.h"
 #include "shash.h"
 #include "socket-util.h"
@@ -670,7 +671,6 @@ ssl_send(struct stream *stream, const void *buffer, size_t n)
         case EAGAIN:
             return n;
         default:
-            sslv->txbuf = NULL;
             return -error;
         }
     }
@@ -683,6 +683,12 @@ ssl_run(struct stream *stream)
 
     if (sslv->txbuf && ssl_do_tx(stream) != EAGAIN) {
         ssl_clear_txbuf(sslv);
+    }
+
+    if (sslv->tx_want != SSL_NOTHING) {
+        if (want_to_poll_events(sslv->tx_want) == SSL_WRITING) {
+            stream_update(stream, true);
+        }
     }
 }
 
@@ -747,6 +753,35 @@ ssl_wait(struct stream *stream, enum stream_wait_type wait)
     }
 }
 
+static int
+ssl_join(struct stream *stream)
+{
+    struct ssl_stream *sslv = ssl_stream_cast(stream);
+    struct poll_group *group = stream->poll_group;
+    void *caller_event = stream->caller_event;
+
+    return poll_group_join(group, sslv->fd, caller_event);
+}
+
+static int
+ssl_update(struct stream *stream, bool write)
+{
+    struct ssl_stream *sslv = ssl_stream_cast(stream);
+    struct poll_group *group = stream->poll_group;
+    void *caller_event = stream->caller_event;
+
+    return poll_group_update(group, sslv->fd, write, caller_event);
+}
+
+static int
+ssl_leave(struct stream *stream)
+{
+    struct ssl_stream *sslv = ssl_stream_cast(stream);
+    struct poll_group *group = stream->poll_group;
+
+    return poll_group_leave(group, sslv->fd);
+}
+
 const struct stream_class ssl_stream_class = {
     "ssl",                      /* name */
     true,                       /* needs_probes */
@@ -758,6 +793,9 @@ const struct stream_class ssl_stream_class = {
     ssl_run,                    /* run */
     ssl_run_wait,               /* run_wait */
     ssl_wait,                   /* wait */
+    ssl_join,                   /* join */
+    ssl_update,                 /* update */
+    ssl_leave,                  /* leave */
 };
 
 /* Passive SSL. */

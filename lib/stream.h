@@ -27,6 +27,7 @@
 
 struct pstream;
 struct stream;
+struct poll_group;
 struct vlog_module;
 
 void stream_usage(const char *name, bool active, bool passive, bool bootstrap);
@@ -40,6 +41,10 @@ const char *stream_get_name(const struct stream *);
 int stream_connect(struct stream *);
 int stream_recv(struct stream *, void *buffer, size_t n);
 int stream_send(struct stream *, const void *buffer, size_t n);
+int stream_join(struct stream *, struct poll_group *group, void *caller_event);
+int stream_update(struct stream *, bool write);
+int stream_leave(struct stream *);
+bool stream_joined(struct stream *);
 
 void stream_run(struct stream *);
 void stream_run_wait(struct stream *);
