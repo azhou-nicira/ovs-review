@@ -53,6 +53,10 @@ size_t jsonrpc_get_backlog(const struct jsonrpc *);
 unsigned int jsonrpc_get_received_bytes(const struct jsonrpc *);
 const char *jsonrpc_get_name(const struct jsonrpc *);
 
+bool jsonrpc_joined_poll_group(const struct jsonrpc *);
+bool jsonrpc_has_pending_input(const struct jsonrpc *);
+void jsonrpc_poll_group_update(struct jsonrpc *, bool);
+
 int jsonrpc_send(struct jsonrpc *, struct jsonrpc_msg *);
 int jsonrpc_recv(struct jsonrpc *, struct jsonrpc_msg **);
 void jsonrpc_recv_wait(struct jsonrpc *);
@@ -107,6 +111,9 @@ void jsonrpc_session_run(struct jsonrpc_session *);
 void jsonrpc_session_wait(struct jsonrpc_session *);
 
 size_t jsonrpc_session_get_backlog(const struct jsonrpc_session *);
+bool jsonrpc_session_joined_poll_group(const struct jsonrpc_session *);
+bool jsonrpc_session_has_pending_input(const struct jsonrpc_session *);
+void jsonrpc_session_poll_group_update(struct jsonrpc_session *, bool);
 const char *jsonrpc_session_get_name(const struct jsonrpc_session *);
 
 int jsonrpc_session_send(struct jsonrpc_session *, struct jsonrpc_msg *);
