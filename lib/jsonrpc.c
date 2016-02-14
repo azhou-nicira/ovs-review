@@ -138,11 +138,15 @@ jsonrpc_run(struct jsonrpc *rpc)
 }
 
 /* Arranges for the poll loop to wake up when 'rpc' needs to perform
- * maintenance activities. */
+ * maintenance activities.
+ *
+ * This function should not be called when 'rpc' has joined a poll
+ * group. Use poll_group_get_events() instead.   */
 void
 jsonrpc_wait(struct jsonrpc *rpc)
 {
     if (!rpc->status) {
+        ovs_assert(!stream_joined(rpc->stream));
         stream_run_wait(rpc->stream);
         if (!list_is_empty(&rpc->output)) {
             stream_send_wait(rpc->stream);
@@ -353,11 +357,36 @@ jsonrpc_recv(struct jsonrpc *rpc, struct jsonrpc_msg **msgp)
     return EAGAIN;
 }
 
+bool
+jsonrpc_joined_poll_group(const struct jsonrpc *rpc)
+{
+    return rpc->status ? false : stream_joined(rpc->stream);
+}
+
+bool
+jsonrpc_has_pending_input(const struct jsonrpc *rpc)
+{
+    return rpc->status ? false : !byteq_is_empty(&rpc->input);
+}
+
+void
+jsonrpc_poll_group_update(struct jsonrpc *rpc, bool write)
+{
+    if (!rpc->status) {
+        ovs_assert(stream_joined(rpc->stream));
+        stream_update(rpc->stream, write);
+    }
+}
+
 /* Causes the poll loop to wake up when jsonrpc_recv() may return a value other
  * than EAGAIN. */
 void
 jsonrpc_recv_wait(struct jsonrpc *rpc)
 {
+    if (!rpc->status) {
+        ovs_assert(!stream_joined(rpc->stream));
+    }
+
     if (rpc->status || !byteq_is_empty(&rpc->input)) {
         poll_immediate_wake_at(rpc->name);
     } else {
@@ -376,6 +405,8 @@ jsonrpc_send_block(struct jsonrpc *rpc, struct jsonrpc_msg *msg)
     int error;
 
     fatal_signal_run();
+
+    ovs_assert(!stream_joined(rpc->stream));
 
     error = jsonrpc_send(rpc, msg);
     if (error) {
@@ -397,6 +428,8 @@ jsonrpc_send_block(struct jsonrpc *rpc, struct jsonrpc_msg *msg)
 int
 jsonrpc_recv_block(struct jsonrpc *rpc, struct jsonrpc_msg **msgp)
 {
+    ovs_assert(!stream_joined(rpc->stream));
+
     for (;;) {
         int error = jsonrpc_recv(rpc, msgp);
         if (error != EAGAIN) {
@@ -827,7 +860,6 @@ jsonrpc_session_open_unreliably(struct jsonrpc *jsonrpc, uint8_t dscp)
     s->stream = NULL;
     s->pstream = NULL;
     s->seqno = 0;
-
     return s;
 }
 
@@ -976,12 +1008,26 @@ jsonrpc_session_run(struct jsonrpc_session *s)
     }
 }
 
+/* Only wait for stream within the 's'. Poll group does not
+ * handle pstream, and stream's initial connection, these
+ * are still using poll loop.   */
 void
 jsonrpc_session_wait(struct jsonrpc_session *s)
 {
+    /*  When s->rpc is set, The jsonrpc session is in connected
+     *  state. Check if 's' has already registered with a poll group.
+     *
+     *  s->stream is set when the stream is not in a connected state
+     *  continue to let poll loop handle it.
+     *
+     *  poll group currently does not work with pstream. Let
+     *  poll loop handle all pstreams. */
     if (s->rpc) {
-        jsonrpc_wait(s->rpc);
-    } else if (s->stream) {
+       if (!jsonrpc_joined_poll_group(s->rpc)) {
+            jsonrpc_wait(s->rpc);
+        }
+    }
+    if (s->stream) {
         stream_run_wait(s->stream);
         stream_connect_wait(s->stream);
     }
@@ -1053,6 +1099,26 @@ jsonrpc_session_recv(struct jsonrpc_session *s)
         }
     }
     return NULL;
+}
+
+bool
+jsonrpc_session_joined_poll_group(const struct jsonrpc_session *s)
+{
+    return s->rpc ? jsonrpc_joined_poll_group(s->rpc) : false;
+}
+
+bool
+jsonrpc_session_has_pending_input(const struct jsonrpc_session *s)
+{
+    return s->rpc ? jsonrpc_has_pending_input(s->rpc) : false;
+}
+
+void
+jsonrpc_session_poll_group_update(struct jsonrpc_session *s, bool write)
+{
+    if (s->rpc) {
+        jsonrpc_poll_group_update(s->rpc, write);
+    }
 }
 
 void
