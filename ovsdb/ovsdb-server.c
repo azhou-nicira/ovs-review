@@ -262,7 +262,7 @@ main(int argc, char *argv[])
 
     /* Load the saved config. */
     load_config(config_tmpfile, &remotes, &db_filenames, &disable_epoll);
-    jsonrpc = ovsdb_jsonrpc_server_create(0);
+    jsonrpc = ovsdb_jsonrpc_server_create(NULL);
 
     shash_init(&all_dbs);
     server_config.all_dbs = &all_dbs;

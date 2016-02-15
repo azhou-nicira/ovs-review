@@ -103,7 +103,7 @@ struct ovsdb_jsonrpc_server {
     struct ovsdb_server up;
     unsigned int n_sessions;
     struct shash remotes;      /* Contains "struct ovsdb_jsonrpc_remote *"s. */
-    int epoll_fd;              /* Use epoll() API on Linux if epoll_fd != 0. */
+    struct poll_group *poll_group;   /* jsonrpc uses the poll_group. */
 };
 
 /* A configured remote.  This is either a passive stream listener plus a list
@@ -134,11 +134,12 @@ static void ovsdb_jsonrpc_server_del_remote(struct shash_node *);
  * falls back to use the poll() API.
  */
 struct ovsdb_jsonrpc_server *
-ovsdb_jsonrpc_server_create(int epoll_fd OVS_UNUSED)
+ovsdb_jsonrpc_server_create(struct poll_group *poll_group)
 {
     struct ovsdb_jsonrpc_server *server = xzalloc(sizeof *server);
     ovsdb_server_init(&server->up);
     shash_init(&server->remotes);
+    server->poll_group = poll_group;
     return server;
 }
 
