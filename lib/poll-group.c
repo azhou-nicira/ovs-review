@@ -33,9 +33,13 @@ VLOG_DEFINE_THIS_MODULE(poll_group);
 static void add_caller_event(struct poll_group *group, void *caller_event);
 
 static const struct poll_group_class *
-poll_group_select_class(const char *class_name OVS_UNUSED, size_t len OVS_UNUSED)
+poll_group_select_class(const char *name, size_t len)
 {
-    /* Nothing has being impemented yet. */
+#ifdef __linux__
+    if (!strncmp(name, "epoll", len) || name[len] != ':') {
+        return &epoll_group_class;
+    }
+#endif
     return NULL;
 }
 
@@ -217,5 +221,4 @@ add_caller_event(struct poll_group *group, void *caller_event)
      }
 
      group->events[group->n_events++] = caller_event;
-
 }
