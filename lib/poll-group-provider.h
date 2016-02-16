@@ -77,6 +77,9 @@ void poll_group_init(struct poll_group *, const char *name,
                      const struct poll_group_class *);
 
 extern const struct poll_group_class poll_group_default_class;
+#ifdef __linux__
+extern const struct poll_group_class poll_group_epoll_class;
+#endif
 
 
 extern const struct poll_group_class poll_group_default_class;

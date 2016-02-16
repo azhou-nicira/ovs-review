@@ -351,6 +351,7 @@ lib_libopenvswitch_la_SOURCES += \
 	lib/dpif-netlink.h \
 	lib/if-notifier.c \
 	lib/if-notifier.h \
+	lib/poll-group-epoll.c \
 	lib/netdev-linux.c \
 	lib/netdev-linux.h \
 	lib/netlink-conntrack.c \
