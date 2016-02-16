@@ -149,4 +149,6 @@ poll_group_assert_class(const struct poll_group *group,
 void poll_group_init(struct poll_group *, const char *name,
                      const struct poll_group_class *);
 
+extern const struct poll_group_class epoll_group_class;
+
 #endif /* poll-group-provider.h */
