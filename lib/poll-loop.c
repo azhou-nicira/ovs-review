@@ -53,6 +53,7 @@ struct poll_loop {
      * wake up immediately, or LLONG_MAX to wait forever. */
     long long int timeout_when; /* In msecs as returned by time_msec(). */
     const char *timeout_where;  /* Where 'timeout_when' was set. */
+    bool waken_by_timer;
 };
 
 static struct poll_loop *poll_loop(void);
@@ -365,11 +366,14 @@ poll_block(void)
                        loop->timeout_when, &elapsed);
     if (retval < 0) {
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
+        loop->waken_by_timer = false;
         VLOG_ERR_RL(&rl, "poll: %s", ovs_strerror(-retval));
     } else if (!retval) {
+        loop->waken_by_timer = true;
         log_wakeup(loop->timeout_where, NULL, elapsed);
     } else if (get_cpu_usage() > 50 || VLOG_IS_DBG_ENABLED()) {
         i = 0;
+        loop->waken_by_timer = false;
         HMAP_FOR_EACH (node, hmap_node, &loop->poll_nodes) {
             if (pollfds[i].revents) {
                 log_wakeup(node->where, &pollfds[i], 0);
@@ -389,6 +393,13 @@ poll_block(void)
 
     seq_woke();
 }
+
+bool
+poll_block_waken_by_timer(void)
+{
+    return poll_loop()->waken_by_timer;
+}
+
 
 static void
 free_poll_loop(void *loop_)

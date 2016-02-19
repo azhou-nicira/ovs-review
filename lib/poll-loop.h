@@ -70,6 +70,9 @@ void poll_immediate_wake_at(const char *where);
 /* Wait until an event occurs. */
 void poll_block(void);
 
+/* Return true if the last poll block was waken by timer*/
+bool poll_block_waken_by_timer(void);
+
 #ifdef  __cplusplus
 }
 #endif
