@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2014, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -256,7 +256,7 @@ main(int argc, char *argv[])
 
     /* Load the saved config. */
     load_config(config_tmpfile, &remotes, &db_filenames);
-    jsonrpc = ovsdb_jsonrpc_server_create();
+    jsonrpc = ovsdb_jsonrpc_server_create(0);
 
     shash_init(&all_dbs);
     server_config.all_dbs = &all_dbs;
