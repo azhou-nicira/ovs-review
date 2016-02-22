@@ -21,15 +21,18 @@
 
 #include "bitmap.h"
 #include "column.h"
-#include "openvswitch/dynamic-string.h"
-#include "monitor.h"
 #include "json.h"
 #include "jsonrpc.h"
 #include "jsonrpc-remote.h"
 #include "jsonrpc-sessions.h"
+#include "latch.h"
+#include "monitor.h"
+#include "openvswitch/dynamic-string.h"
+#include "openvswitch/vlog.h"
 #include "ovsdb-error.h"
-#include "ovsdb-parser.h"
 #include "ovsdb.h"
+#include "ovsdb-parser.h"
+#include "ovs-thread.h"
 #include "poll-loop.h"
 #include "reconnect.h"
 #include "row.h"
@@ -40,14 +43,25 @@
 #include "timeval.h"
 #include "transaction.h"
 #include "trigger.h"
-#include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(ovsdb_jsonrpc_server);
 
 struct ovsdb_jsonrpc_remote;
 struct ovsdb_jsonrpc_session;
 
-static void sessions_handler_init(struct sessions_handler *);
+
+/* Sessions handler */
+struct sessions_handler {
+    struct ovs_list all_sessions;  /* Holds 'ovs_jsonrpc_sessions' that runs
+                                      on the same thread, */
+    bool use_pthread;              /* Starts a pthread for this sessions? */
+
+    /* The following members are not initialized if 'use_pthread' is false. */
+    pthread_t thread;
+    struct latch exit_latch;
+};
+
+static void sessions_handler_init(struct sessions_handler *, bool);
 static void sessions_handler_destroy(struct sessions_handler *);
 static struct sessions_handler *main_handler(
     const struct ovsdb_jsonrpc_server *);
@@ -63,23 +77,31 @@ static void ovsdb_jsonrpc_server_del_remote(struct ovsdb_jsonrpc_server *,
                                             struct shash_node *);
 
 
+/* JSON-RPC database server. */
+
 /* Creates and returns a new server to provide JSON-RPC access to an OVSDB.
  *
+ * 'max_threads' limits the number of threads it can create.
+ *
  * The caller must call ovsdb_jsonrpc_server_add_db() for each database to
- * which 'server' should provide access. */
+ * which 'server' should provide access.  */
 struct ovsdb_jsonrpc_server *
-ovsdb_jsonrpc_server_create(void)
+ovsdb_jsonrpc_server_create(size_t n_max_threads)
 {
-    struct ovsdb_jsonrpc_server *server = xzalloc(sizeof *server);
-    ovsdb_server_init(&server->up);
-    shash_init(&server->remotes);
+    struct ovsdb_jsonrpc_server *svr = xzalloc(sizeof *svr);
+    unsigned int i, n_handlers;
+    ovsdb_server_init(&svr->up);
+    shash_init(&svr->remotes);
 
-    /* Only create the main handler */
-    server->handlers = xmalloc(sizeof (struct sessions_handler));
-    server->n_handlers = 1;
-    sessions_handler_init(main_handler(server));
+    /* One handler for each thread, plus the main handler.  */
+    svr->n_handlers = n_handlers = n_max_threads + 1;
+    svr->handlers = xmalloc(sizeof *svr->handlers * n_handlers);
+    for (i = 0; i < svr->n_handlers; i++) {
+        struct sessions_handler *handler = &svr->handlers[i];
+        sessions_handler_init(handler, handler != main_handler(svr));
+    }
 
-    return server;
+    return svr;
 }
 
 /* Adds 'db' to the set of databases served out by 'svr'.  Returns true if
@@ -157,7 +179,7 @@ ovsdb_jsonrpc_server_add_remote(struct ovsdb_jsonrpc_server *svr,
     shash_add(&svr->remotes, name, remote);
     if (!listener) {
         ovsdb_jsonrpc_session_create(svr, jsonrpc_session_open(name, true),
-                                     remote, main_handler(svr));
+                                     remote, main_handler_sessions(svr));
     }
     return remote;
 }
@@ -266,6 +288,7 @@ ovsdb_jsonrpc_server_destroy(struct ovsdb_jsonrpc_server *svr)
         sessions_handler_destroy(&svr->handlers[i]);
     }
     free(svr->handlers);
+
     shash_destroy(&svr->remotes);
     ovsdb_server_destroy(&svr->up);
     free(svr);
@@ -335,19 +358,47 @@ ovsdb_jsonrpc_server_add_session(struct ovsdb_jsonrpc_server *svr,
     struct jsonrpc_session *js;
 
     js = jsonrpc_session_open_unreliably(jsonrpc_open(stream), dscp);
-    ovsdb_jsonrpc_session_create(svr, js, remote, main_handler(svr));
+    ovsdb_jsonrpc_session_create(svr, js, remote, main_handler_sessions(svr));
+}
+
+
+static void *
+sessions_handler_main(void * h_)
+{
+    struct sessions_handler *handler = h_;
+
+    VLOG_DBG("sessions handler thread created");
+    while (!latch_is_set(&handler->exit_latch)) {
+        latch_wait(&handler->exit_latch);
+        poll_block();
+    }
+    VLOG_DBG("sessions handler thread finished");
+    return NULL;
 }
 
 static void
-sessions_handler_init(struct sessions_handler *handler)
+sessions_handler_init(struct sessions_handler *handler, bool use_pthread)
 {
     ovs_list_init(&handler->all_sessions);
+
+    handler->use_pthread = use_pthread;
+    if (use_pthread) {
+        handler->thread = ovs_thread_create("sessions_handler",
+                                            sessions_handler_main, handler);
+        latch_init(&handler->exit_latch);
+    }
 }
 
 static void
 sessions_handler_destroy(struct sessions_handler *handler)
 {
     ovs_assert(ovs_list_is_empty(&handler->all_sessions));
+
+    if (handler->use_pthread) {
+        latch_set(&handler->exit_latch);
+        xpthread_join(handler->thread, NULL);
+        latch_destroy(&handler->exit_latch);
+    }
 }
 
 static struct sessions_handler *
