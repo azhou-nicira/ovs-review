@@ -28,6 +28,7 @@
 #include "ovsdb-error.h"
 #include "ovsdb.h"
 #include "ovsdb-parser.h"
+#include "ovs-thread.h"
 #include "poll-loop.h"
 #include "reconnect.h"
 #include "row.h"
@@ -56,6 +57,13 @@ struct ovsdb_jsonrpc_session {
     /* Network connectivity. */
     struct jsonrpc_session *js;  /* JSON-RPC session. */
     unsigned int js_seqno;       /* Last jsonrpc_session_get_seqno() value. */
+
+    /* Multi-threading.  */
+    struct ovs_refcount refcount; /* Opaque pointer reference counter.  */
+    unsigned int thread_id; /* The thread that created the session.
+                               This thread has exclusive access to the
+                               session. Other thread may use pointer to
+                               this session as opaue pointer. */
 };
 
 /* Sessions. */
@@ -502,7 +510,7 @@ struct ovsdb_jsonrpc_session *
 ovsdb_jsonrpc_session_create(struct ovsdb_jsonrpc_server *server,
                              struct jsonrpc_session *js,
                              struct ovsdb_jsonrpc_remote *remote,
-                             struct sessions_handler *handler)
+                             struct ovs_list *sessions)
 {
     struct ovsdb_jsonrpc_session *s;
 
@@ -514,7 +522,9 @@ ovsdb_jsonrpc_session_create(struct ovsdb_jsonrpc_server *server,
     hmap_init(&s->monitors);
     s->js = js;
     s->js_seqno = jsonrpc_session_get_seqno(js);
-    ovs_list_push_back(&handler->all_sessions, &s->node);
+    ovs_refcount_init(&s->refcount);
+    ovsdb_jsonrpc_sessions_add(sessions, s);
+    s->thread_id = ovsthread_id_self();
 
     /* Let server know about session membership change.  */
     server->n_sessions++;

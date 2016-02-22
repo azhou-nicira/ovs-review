@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, 2010, 2011, 2012, 2013 Nicira, Inc.
+/* Copyright (c) 2009, 2010, 2011, 2012, 2013, 2016 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "openvswitch/types.h"
+#include "ovs-thread.h"
 #include "server.h"
 
 struct ovsdb;
@@ -29,10 +30,16 @@ struct ovs_list;
 struct ovsdb_jsonrpc_remote;
 struct sessions_handler;
 
-/* Sessions_handler. */
-struct sessions_handler {
-    struct ovs_list all_sessions;  /* List of 'ovsdb_jsonrpc_session's.   */
-};
+DECLARE_EXTERN_PER_THREAD_DATA(struct sessions_handler *, thread_handler);
+
+/* Return a per-thread sessions_handler pointer. This value is assigned once
+ * when a thread is craeted, and never changes within the lifetime of the
+ * process.  */
+static inline struct sessions_handler *
+ovsdb_thread_sessions_handler(void)
+{
+    return *thread_handler_get();
+}
 
 /* JSON-RPC database server. */
 struct ovsdb_jsonrpc_server {
@@ -56,9 +63,14 @@ struct ovsdb_jsonrpc_server {
      * the server is destroyed.    */
     struct sessions_handler *handlers;
     unsigned int n_handlers;
+
+    /* Threads. */
+    /* No need to store 'n_max_threads' here, it can be derived from
+     * 'n_handlers', n_max_threads == n_handlers - 1.  */
+    size_t n_active_threads;
 };
 
-struct ovsdb_jsonrpc_server *ovsdb_jsonrpc_server_create(void);
+struct ovsdb_jsonrpc_server *ovsdb_jsonrpc_server_create(size_t n_max_threads);
 bool ovsdb_jsonrpc_server_add_db(struct ovsdb_jsonrpc_server *,
                                  struct ovsdb *);
 bool ovsdb_jsonrpc_server_remove_db(struct ovsdb_jsonrpc_server *,
@@ -114,6 +126,7 @@ void ovsdb_jsonrpc_server_add_session(struct ovsdb_jsonrpc_server *,
                                       struct stream *,
                                       struct ovsdb_jsonrpc_remote *,
                                       uint8_t dscp);
+#endif /* OVSDB_JSONRPC_SERVER_H */
 
 /* OVSDB server Multi-Threading design
  * ==================================
