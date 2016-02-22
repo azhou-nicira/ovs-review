@@ -53,6 +53,6 @@ void ovsdb_jsonrpc_session_get_status(
 
 struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_session_create(
     struct ovsdb_jsonrpc_server *server, struct jsonrpc_session *js,
-    struct ovsdb_jsonrpc_remote *remote, struct sessions_handler *handler);
+    struct ovsdb_jsonrpc_remote *remote, struct ovs_list *sessions);
 
 #endif /* ovsdb/jsonrpc-session.h */
