@@ -25,6 +25,7 @@
 #include "monitor.h"
 #include "json.h"
 #include "jsonrpc.h"
+#include "jsonrpc-remote.h"
 #include "ovsdb-error.h"
 #include "ovsdb-parser.h"
 #include "ovsdb.h"
@@ -49,8 +50,6 @@ struct ovsdb_jsonrpc_session;
  * method with an error.  */
 static bool monitor2_enable__ = true;
 
-/* Message rate-limiting. */
-static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
 /* Session set. */
 static void ovsdb_jsonrpc_sessions_run(struct ovs_list *);
@@ -62,24 +61,16 @@ static void ovsdb_jsonrpc_sessions_reconnect(struct ovs_list *,
 static void ovsdb_jsonrpc_sessions_set_options(struct ovs_list *,
                                          const struct ovsdb_jsonrpc_remote *,
                                          const struct ovsdb_jsonrpc_options *);
-static size_t ovsdb_jsonrpc_sessions_count(const struct ovs_list *,
-                                          const struct ovsdb_jsonrpc_remote *);
 
 /* Sessions. */
-static struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_session_create(
-    struct ovsdb_jsonrpc_remote *, struct jsonrpc_session *);
-static bool ovsdb_jsonrpc_active_session_get_status(
-    const struct ovsdb_jsonrpc_remote *remote,
-    struct ovsdb_jsonrpc_remote_status *);
-static void ovsdb_jsonrpc_session_get_status(
-    const struct ovsdb_jsonrpc_session *,
-    struct ovsdb_jsonrpc_remote_status *);
 static void ovsdb_jsonrpc_session_get_memory_usage_all(
     const struct ovsdb_jsonrpc_server *, struct simap *usage);
 static void ovsdb_jsonrpc_session_unlock_all(struct ovsdb_jsonrpc_session *);
 static void ovsdb_jsonrpc_session_unlock__(struct ovsdb_lock_waiter *);
 static void ovsdb_jsonrpc_session_send(struct ovsdb_jsonrpc_session *,
                                        struct jsonrpc_msg *);
+static size_t ovsdb_jsonrpc_sessions_count(const struct ovs_list *,
+                                        const struct ovsdb_jsonrpc_remote *);
 
 /* Triggers. */
 static void ovsdb_jsonrpc_trigger_create(struct ovsdb_jsonrpc_session *,
@@ -106,30 +97,21 @@ static bool ovsdb_jsonrpc_monitor_needs_flush(struct ovsdb_jsonrpc_session *);
 static struct json *ovsdb_jsonrpc_monitor_compose_update(
     struct ovsdb_jsonrpc_monitor *monitor, bool initial);
 
+/* Remotes. */
+static struct ovsdb_jsonrpc_remote *ovsdb_jsonrpc_server_add_remote(
+    struct ovsdb_jsonrpc_server *, const char *name,
+    const struct ovsdb_jsonrpc_options *options
+);
+static void ovsdb_jsonrpc_server_del_remote(struct shash_node *);
+
 
 /* JSON-RPC database server. */
-
 struct ovsdb_jsonrpc_server {
     struct ovsdb_server up;
     unsigned int n_sessions;
     struct shash remotes;      /* Contains "struct ovsdb_jsonrpc_remote *"s. */
     struct ovs_list all_sessions; /* All 'ovsdb_jsonrpc_session's.   */
 };
-
-/* A configured remote.  This is either a passive stream listener plus a list
- * of the currently connected sessions, or a list of exactly one active
- * session. */
-struct ovsdb_jsonrpc_remote {
-    struct ovsdb_jsonrpc_server *server;
-    struct pstream *listener;   /* Listener, if passive. */
-    uint8_t dscp;
-};
-
-static struct ovsdb_jsonrpc_remote *ovsdb_jsonrpc_server_add_remote(
-    struct ovsdb_jsonrpc_server *, const char *name,
-    const struct ovsdb_jsonrpc_options *options
-);
-static void ovsdb_jsonrpc_server_del_remote(struct shash_node *);
 
 /* Creates and returns a new server to provide JSON-RPC access to an OVSDB.
  *
@@ -164,6 +146,139 @@ ovsdb_jsonrpc_server_add_db(struct ovsdb_jsonrpc_server *svr, struct ovsdb *db)
     return ovsdb_server_add_db(&svr->up, db);
 }
 
+/* Sets 'svr''s current set of remotes to the names in 'new_remotes', with
+ * options in the struct ovsdb_jsonrpc_options supplied as the data values.
+ *
+ * A remote is an active or passive stream connection method, e.g. "pssl:" or
+ * "tcp:1.2.3.4". */
+void
+ovsdb_jsonrpc_server_set_remotes(struct ovsdb_jsonrpc_server *svr,
+                                 const struct shash *new_remotes)
+{
+    struct shash_node *node, *next;
+
+    SHASH_FOR_EACH_SAFE (node, next, &svr->remotes) {
+        struct ovsdb_jsonrpc_remote *remote = node->data;
+        struct ovsdb_jsonrpc_options *options
+            = shash_find_data(new_remotes, node->name);
+
+        if (!options) {
+            VLOG_INFO("%s: remote deconfigured", node->name);
+            ovsdb_jsonrpc_server_del_remote(node);
+        } else if (!ovsdb_jsonrpc_remote_options_can_change(remote, options)) {
+            ovsdb_jsonrpc_server_del_remote(node);
+        }
+    }
+    SHASH_FOR_EACH (node, new_remotes) {
+        const struct ovsdb_jsonrpc_options *options = node->data;
+        struct ovsdb_jsonrpc_remote *remote;
+
+        remote = shash_find_data(&svr->remotes, node->name);
+        if (!remote) {
+            remote = ovsdb_jsonrpc_server_add_remote(svr, node->name, options);
+            if (!remote) {
+                continue;
+            }
+        }
+
+        ovsdb_jsonrpc_sessions_set_options(&svr->all_sessions, remote,
+                                           options);
+    }
+}
+
+static struct ovsdb_jsonrpc_remote *
+ovsdb_jsonrpc_server_add_remote(struct ovsdb_jsonrpc_server *svr,
+                                const char *name,
+                                const struct ovsdb_jsonrpc_options *options)
+{
+    struct ovsdb_jsonrpc_remote *remote;
+    struct pstream *listener;
+
+    remote = ovsdb_jsonrpc_remote_create(svr, name, options, &listener);
+    if (!remote) {
+        return remote;
+    }
+
+    shash_add(&svr->remotes, name, remote);
+    if (!listener) {
+        struct ovsdb_jsonrpc_server *server;
+        server = ovsdb_jsonrpc_remote_get_server(remote);
+        ovsdb_jsonrpc_session_create(server, jsonrpc_session_open(name, true),
+                                     remote);
+    }
+    return remote;
+}
+
+static void
+ovsdb_jsonrpc_server_del_remote(struct shash_node *node)
+{
+    struct ovsdb_jsonrpc_remote *remote = node->data;
+    struct ovsdb_jsonrpc_server *server;
+
+    server = ovsdb_jsonrpc_remote_get_server(remote);
+    ovsdb_jsonrpc_sessions_close(&server->all_sessions, remote);
+    ovsdb_jsonrpc_remote_destroy(remote);
+    shash_delete(&server->remotes, node);
+    free(remote);
+}
+
+/* Stores status information for the remote named 'target', which should have
+ * been configured on 'svr' with a call to ovsdb_jsonrpc_server_set_remotes(),
+ * into '*status'.  On success returns true, on failure (if 'svr' doesn't have
+ * a remote named 'target' or if that remote is an outbound remote that has no
+ * active connections) returns false.  On failure, 'status' will be zeroed.
+ */
+bool
+ovsdb_jsonrpc_server_get_remote_status(
+    const struct ovsdb_jsonrpc_server *svr, const char *target,
+    struct ovsdb_jsonrpc_remote_status *status)
+{
+    struct ovsdb_jsonrpc_remote *remote;
+
+    memset(status, 0, sizeof *status);
+    remote = shash_find_data(&svr->remotes, target);
+    if (!remote) {
+        return false;
+    }
+
+    return ovsdb_jsonrpc_remote_get_status(remote, status);
+}
+
+void
+ovsdb_jsonrpc_server_free_remote_status(
+    struct ovsdb_jsonrpc_remote_status *status)
+{
+    free(status->locks_held);
+    free(status->locks_waiting);
+    free(status->locks_lost);
+}
+
+void
+ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *svr)
+{
+    struct shash_node *node;
+
+    SHASH_FOR_EACH (node, &svr->remotes) {
+        struct ovsdb_jsonrpc_remote *remote = node->data;
+
+        ovsdb_jsonrpc_remote_run(remote);
+        ovsdb_jsonrpc_sessions_run(&svr->all_sessions);
+    }
+}
+
+void
+ovsdb_jsonrpc_server_wait(struct ovsdb_jsonrpc_server *svr)
+{
+    struct shash_node *node;
+
+    SHASH_FOR_EACH (node, &svr->remotes) {
+        struct ovsdb_jsonrpc_remote *remote = node->data;
+
+        ovsdb_jsonrpc_remote_wait(remote);
+        ovsdb_jsonrpc_sessions_wait(&svr->all_sessions);
+    }
+}
+
 /* Removes 'db' from the set of databases served out by 'svr'.  Returns
  * true if successful, false if there is no database associated with 'db'. */
 bool
@@ -194,6 +309,13 @@ ovsdb_jsonrpc_server_destroy(struct ovsdb_jsonrpc_server *svr)
     free(svr);
 }
 
+size_t
+ovsdb_jsonrpc_server_sessions_count(struct ovsdb_jsonrpc_server *server,
+                                    struct ovsdb_jsonrpc_remote *remote)
+{
+    return ovsdb_jsonrpc_sessions_count(&server->all_sessions, remote);
+}
+
 struct ovsdb_jsonrpc_options *
 ovsdb_jsonrpc_default_options(const char *target)
 {
@@ -203,128 +325,6 @@ ovsdb_jsonrpc_default_options(const char *target)
                                ? RECONNECT_DEFAULT_PROBE_INTERVAL
                                : 0);
     return options;
-}
-
-/* Sets 'svr''s current set of remotes to the names in 'new_remotes', with
- * options in the struct ovsdb_jsonrpc_options supplied as the data values.
- *
- * A remote is an active or passive stream connection method, e.g. "pssl:" or
- * "tcp:1.2.3.4". */
-void
-ovsdb_jsonrpc_server_set_remotes(struct ovsdb_jsonrpc_server *svr,
-                                 const struct shash *new_remotes)
-{
-    struct shash_node *node, *next;
-
-    SHASH_FOR_EACH_SAFE (node, next, &svr->remotes) {
-        struct ovsdb_jsonrpc_remote *remote = node->data;
-        struct ovsdb_jsonrpc_options *options
-            = shash_find_data(new_remotes, node->name);
-
-        if (!options) {
-            VLOG_INFO("%s: remote deconfigured", node->name);
-            ovsdb_jsonrpc_server_del_remote(node);
-        } else if (options->dscp != remote->dscp) {
-            ovsdb_jsonrpc_server_del_remote(node);
-         }
-    }
-    SHASH_FOR_EACH (node, new_remotes) {
-        const struct ovsdb_jsonrpc_options *options = node->data;
-        struct ovsdb_jsonrpc_remote *remote;
-
-        remote = shash_find_data(&svr->remotes, node->name);
-        if (!remote) {
-            remote = ovsdb_jsonrpc_server_add_remote(svr, node->name, options);
-            if (!remote) {
-                continue;
-            }
-        }
-
-        ovsdb_jsonrpc_sessions_set_options(&svr->all_sessions, remote,
-                                           options);
-    }
-}
-
-static struct ovsdb_jsonrpc_remote *
-ovsdb_jsonrpc_server_add_remote(struct ovsdb_jsonrpc_server *svr,
-                                const char *name,
-                                const struct ovsdb_jsonrpc_options *options)
-{
-    struct ovsdb_jsonrpc_remote *remote;
-    struct pstream *listener;
-    int error;
-
-    error = jsonrpc_pstream_open(name, &listener, options->dscp);
-    if (error && error != EAFNOSUPPORT) {
-        VLOG_ERR_RL(&rl, "%s: listen failed: %s", name, ovs_strerror(error));
-        return NULL;
-    }
-
-    remote = xmalloc(sizeof *remote);
-    remote->server = svr;
-    remote->listener = listener;
-    remote->dscp = options->dscp;
-    shash_add(&svr->remotes, name, remote);
-
-    if (!listener) {
-        ovsdb_jsonrpc_session_create(remote, jsonrpc_session_open(name, true));
-    }
-    return remote;
-}
-
-static void
-ovsdb_jsonrpc_server_del_remote(struct shash_node *node)
-{
-    struct ovsdb_jsonrpc_remote *remote = node->data;
-    struct ovsdb_jsonrpc_server *server = remote->server;
-
-    ovsdb_jsonrpc_sessions_close(&server->all_sessions, remote);
-    pstream_close(remote->listener);
-    shash_delete(&server->remotes, node);
-    free(remote);
-}
-
-/* Stores status information for the remote named 'target', which should have
- * been configured on 'svr' with a call to ovsdb_jsonrpc_server_set_remotes(),
- * into '*status'.  On success returns true, on failure (if 'svr' doesn't have
- * a remote named 'target' or if that remote is an outbound remote that has no
- * active connections) returns false.  On failure, 'status' will be zeroed.
- */
-bool
-ovsdb_jsonrpc_server_get_remote_status(
-    const struct ovsdb_jsonrpc_server *svr, const char *target,
-    struct ovsdb_jsonrpc_remote_status *status)
-{
-    const struct ovsdb_jsonrpc_remote *remote;
-
-    memset(status, 0, sizeof *status);
-
-    remote = shash_find_data(&svr->remotes, target);
-
-    if (!remote) {
-        return false;
-    }
-
-    if (remote->listener) {
-        int n_connections = ovsdb_jsonrpc_sessions_count(&svr->all_sessions,
-                                                         remote);
-
-        status->bound_port = pstream_get_bound_port(remote->listener);
-        status->n_connections = n_connections;
-        status->is_connected = (n_connections != 0);
-        return true;
-    }
-
-    return ovsdb_jsonrpc_active_session_get_status(remote, status);
-}
-
-void
-ovsdb_jsonrpc_server_free_remote_status(
-    struct ovsdb_jsonrpc_remote_status *status)
-{
-    free(status->locks_held);
-    free(status->locks_waiting);
-    free(status->locks_lost);
 }
 
 /* Forces all of the JSON-RPC sessions managed by 'svr' to disconnect and
@@ -341,51 +341,6 @@ ovsdb_jsonrpc_server_reconnect(struct ovsdb_jsonrpc_server *svr)
     }
 }
 
-void
-ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *svr)
-{
-    struct shash_node *node;
-
-    SHASH_FOR_EACH (node, &svr->remotes) {
-        struct ovsdb_jsonrpc_remote *remote = node->data;
-
-        if (remote->listener) {
-            struct stream *stream;
-            int error;
-
-            error = pstream_accept(remote->listener, &stream);
-            if (!error) {
-                struct jsonrpc_session *js;
-                js = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
-                                                     remote->dscp);
-                ovsdb_jsonrpc_session_create(remote, js);
-            } else if (error != EAGAIN) {
-                VLOG_WARN_RL(&rl, "%s: accept failed: %s",
-                             pstream_get_name(remote->listener),
-                             ovs_strerror(error));
-            }
-        }
-
-        ovsdb_jsonrpc_sessions_run(&svr->all_sessions);
-    }
-}
-
-void
-ovsdb_jsonrpc_server_wait(struct ovsdb_jsonrpc_server *svr)
-{
-    struct shash_node *node;
-
-    SHASH_FOR_EACH (node, &svr->remotes) {
-        struct ovsdb_jsonrpc_remote *remote = node->data;
-
-        if (remote->listener) {
-            pstream_wait(remote->listener);
-        }
-
-        ovsdb_jsonrpc_sessions_wait(&svr->all_sessions);
-    }
-}
-
 /* Adds some memory usage statistics for 'svr' into 'usage', for use with
  * memory_report(). */
 void
@@ -395,13 +350,14 @@ ovsdb_jsonrpc_server_get_memory_usage(const struct ovsdb_jsonrpc_server *svr,
     simap_increase(usage, "sessions", svr->n_sessions);
     ovsdb_jsonrpc_session_get_memory_usage_all(svr, usage);
 }
+
 
 /* JSON-RPC database server session. */
 
 struct ovsdb_jsonrpc_session {
     struct ovs_list node;       /* Element in remote's sessions list. */
     struct ovsdb_session up;
-    struct ovsdb_jsonrpc_remote *remote;
+    const struct ovsdb_jsonrpc_remote *remote;
 
     /* Triggers. */
     struct hmap triggers;       /* Hmap of "struct ovsdb_jsonrpc_trigger"s. */
@@ -423,27 +379,6 @@ static void ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *,
                                              struct jsonrpc_msg *);
 static void ovsdb_jsonrpc_session_got_notify(struct ovsdb_jsonrpc_session *,
                                              struct jsonrpc_msg *);
-
-static struct ovsdb_jsonrpc_session *
-ovsdb_jsonrpc_session_create(struct ovsdb_jsonrpc_remote *remote,
-                             struct jsonrpc_session *js)
-{
-    struct ovsdb_jsonrpc_session *s;
-    struct ovsdb_jsonrpc_server *server = remote->server;
-
-    s = xzalloc(sizeof *s);
-    ovsdb_session_init(&s->up, &server->up);
-    s->remote = remote;
-    ovs_list_push_back(&server->all_sessions, &s->node);
-    hmap_init(&s->triggers);
-    hmap_init(&s->monitors);
-    s->js = js;
-    s->js_seqno = jsonrpc_session_get_seqno(js);
-
-    server->n_sessions++;
-
-    return s;
-}
 
 static void
 ovsdb_jsonrpc_session_close(struct ovsdb_jsonrpc_session *s)
@@ -542,28 +477,7 @@ ovsdb_jsonrpc_session_get_memory_usage_all(
     }
 }
 
-/* Sets the 'status' of for the 'remote' with an outgoing connection.   */
-static bool
-ovsdb_jsonrpc_active_session_get_status(
-    const struct ovsdb_jsonrpc_remote *remote,
-    struct ovsdb_jsonrpc_remote_status *status)
-{
-    const struct ovs_list *sessions = &remote->server->all_sessions;
-    const struct ovsdb_jsonrpc_session *s;
-
-    if (ovs_list_is_empty(sessions)) {
-        return false;
-    }
-
-    ovs_assert(ovs_list_is_singleton(sessions));
-    s = CONTAINER_OF(ovs_list_front(sessions), struct ovsdb_jsonrpc_session, node);
-    ovsdb_jsonrpc_session_get_status(s, status);
-    status->n_connections = 1;
-
-    return true;
-}
-
-static void
+void
 ovsdb_jsonrpc_session_get_status(const struct ovsdb_jsonrpc_session *session,
                                  struct ovsdb_jsonrpc_remote_status *status)
 {
@@ -1429,4 +1343,42 @@ ovsdb_jsonrpc_sessions_set_options(struct ovs_list *sessions,
             ovsdb_jsonrpc_session_set_options(s, options);
         }
     }
+}
+
+struct ovsdb_jsonrpc_session *
+ovsdb_jsonrpc_session_create(struct ovsdb_jsonrpc_server *server,
+                             struct jsonrpc_session *js,
+                             struct ovsdb_jsonrpc_remote *remote)
+{
+    struct ovsdb_jsonrpc_session *s;
+
+    s = xzalloc(sizeof *s);
+    ovsdb_session_init(&s->up, &server->up);
+    s->remote = remote;
+    ovs_list_push_back(&server->all_sessions, &s->node);
+    hmap_init(&s->triggers);
+    hmap_init(&s->monitors);
+    s->js = js;
+    s->js_seqno = jsonrpc_session_get_seqno(js);
+
+    server->n_sessions++;
+
+    return s;
+}
+
+/* Return the first session held in 'server' for the given 'remote'. */
+struct ovsdb_jsonrpc_session *
+ovsdb_jsonrpc_server_first_session(struct ovsdb_jsonrpc_server *svr,
+                                   struct ovsdb_jsonrpc_remote *remote)
+{
+    const struct ovs_list *sessions = &svr->all_sessions;
+    struct ovsdb_jsonrpc_session *s;
+
+    LIST_FOR_EACH (s, node, sessions) {
+        if (s->remote == remote) {
+            return s;
+        }
+    }
+
+    return NULL;
 }

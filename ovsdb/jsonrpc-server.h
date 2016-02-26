@@ -22,6 +22,9 @@
 struct ovsdb;
 struct shash;
 struct simap;
+struct ovs_list;
+struct ovsdb_jsonrpc_remote;
+struct jsonrpc_session;
 
 struct ovsdb_jsonrpc_server *ovsdb_jsonrpc_server_create(void);
 bool ovsdb_jsonrpc_server_add_db(struct ovsdb_jsonrpc_server *,
@@ -65,6 +68,11 @@ void ovsdb_jsonrpc_server_reconnect(struct ovsdb_jsonrpc_server *);
 
 void ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *);
 void ovsdb_jsonrpc_server_wait(struct ovsdb_jsonrpc_server *);
+size_t ovsdb_jsonrpc_server_sessions_count(
+    struct ovsdb_jsonrpc_server *, struct ovsdb_jsonrpc_remote *);
+
+struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_server_first_session(
+    struct ovsdb_jsonrpc_server *, struct ovsdb_jsonrpc_remote *);
 
 void ovsdb_jsonrpc_server_get_memory_usage(const struct ovsdb_jsonrpc_server *,
                                            struct simap *usage);
@@ -73,4 +81,12 @@ struct ovsdb_jsonrpc_monitor;
 void ovsdb_jsonrpc_monitor_destroy(struct ovsdb_jsonrpc_monitor *);
 void ovsdb_jsonrpc_disable_monitor2(void);
 
+struct ovsdb_jsonrpc_session;
+void ovsdb_jsonrpc_session_get_status(
+    const struct ovsdb_jsonrpc_session *session,
+    struct ovsdb_jsonrpc_remote_status *status);
+
+struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_session_create(
+    struct ovsdb_jsonrpc_server *server, struct jsonrpc_session *js,
+    struct ovsdb_jsonrpc_remote *remote);
 #endif /* ovsdb/jsonrpc-server.h */
