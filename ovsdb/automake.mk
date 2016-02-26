@@ -12,6 +12,8 @@ ovsdb_libovsdb_la_SOURCES = \
 	ovsdb/execution.c \
 	ovsdb/file.c \
 	ovsdb/file.h \
+	ovsdb/jsonrpc-remote.c \
+	ovsdb/jsonrpc-remote.h \
 	ovsdb/jsonrpc-server.c \
 	ovsdb/jsonrpc-server.h \
 	ovsdb/log.c \
