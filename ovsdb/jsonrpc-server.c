@@ -56,14 +56,14 @@ static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 static void ovsdb_jsonrpc_sessions_run(struct ovs_list *);
 static void ovsdb_jsonrpc_sessions_wait(struct ovs_list *);
 static void ovsdb_jsonrpc_sessions_close(struct ovs_list *,
-                                   const struct ovsdb_jsonrpc_remote *remote);
-static void ovsdb_jsonrpc_sessions_reconnect( struct ovs_list *,
-                                   const struct ovsdb_jsonrpc_remote *remote);
+                                         const void *remote);
+static void ovsdb_jsonrpc_sessions_reconnect(struct ovs_list *,
+                                        const void *remote);
 static void ovsdb_jsonrpc_sessions_set_options(struct ovs_list *,
-                                   const struct ovsdb_jsonrpc_remote *remote,
+                                   const void *remote,
                                    const struct ovsdb_jsonrpc_options *);
 static size_t ovsdb_jsonrpc_sessions_count(const struct ovs_list *,
-                                   const struct ovsdb_jsonrpc_remote *remote);
+                                   const void *remote);
 
 /* Sessions. */
 static struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_session_create(
@@ -408,7 +408,7 @@ ovsdb_jsonrpc_server_get_memory_usage(struct ovsdb_jsonrpc_server *svr,
 struct ovsdb_jsonrpc_session {
     struct ovs_list node;       /* Element in remote's sessions list. */
     struct ovsdb_session up;
-    struct ovsdb_jsonrpc_remote *remote;
+    const void *remote;
 
     /* Triggers. */
     struct hmap triggers;       /* Hmap of "struct ovsdb_jsonrpc_trigger"s. */
@@ -1375,7 +1375,7 @@ ovsdb_jsonrpc_sessions_wait(struct ovs_list *sessions)
 
 static void
 ovsdb_jsonrpc_sessions_close(struct ovs_list *sessions,
-                             const struct ovsdb_jsonrpc_remote *remote)
+                             const void *remote)
 {
     struct ovsdb_jsonrpc_session *s, *next;
 
@@ -1390,7 +1390,7 @@ ovsdb_jsonrpc_sessions_close(struct ovs_list *sessions,
  * reconnect. */
 static void
 ovsdb_jsonrpc_sessions_reconnect(struct ovs_list *sessions,
-                                 const struct ovsdb_jsonrpc_remote *remote)
+                                 const void *remote)
 {
     struct ovsdb_jsonrpc_session *s, *next;
 
@@ -1406,7 +1406,7 @@ ovsdb_jsonrpc_sessions_reconnect(struct ovs_list *sessions,
 
 static size_t
 ovsdb_jsonrpc_sessions_count(const struct ovs_list *sessions,
-                             const struct ovsdb_jsonrpc_remote *remote)
+                             const void *remote)
 {
     struct ovsdb_jsonrpc_session *s = NULL;
     size_t count = 0;
@@ -1426,7 +1426,7 @@ ovsdb_jsonrpc_sessions_count(const struct ovs_list *sessions,
  * re-open the session.) */
 static void
 ovsdb_jsonrpc_sessions_set_options(struct ovs_list *sessions,
-                                   const struct ovsdb_jsonrpc_remote *remote,
+                                   const void *remote,
                                    const struct ovsdb_jsonrpc_options *options)
 {
     struct ovsdb_jsonrpc_session *s;
