@@ -531,7 +531,7 @@ ovsdb_jsonrpc_session_create(struct ovsdb_jsonrpc_server *server,
     s->handler = *per_thread_handler_get();
 
     /* Let server know about session membership change.  */
-    server->n_sessions++;
+    atomic_count_inc(&server->n_sessions);
     return s;
 }
 
@@ -552,7 +552,9 @@ ovsdb_jsonrpc_session_close(struct ovsdb_jsonrpc_session *s)
     ovsdb_session_destroy(&s->up);
 
     /* Let server know about session membership change.  */
-    server->n_sessions--;
+    atomic_count_dec(&server->n_sessions);
+
+    ovs_list_remove(&s->node);
     free(s);
 }
 
