@@ -42,6 +42,8 @@ bool ovsdb_jsonrpc_remote_options_can_change(
     const struct ovsdb_jsonrpc_remote *remote,
     const struct ovsdb_jsonrpc_options *new_options);
 
+uint8_t ovsdb_jsonrpc_remote_dscp(const struct ovsdb_jsonrpc_remote *);
+
 struct ovsdb_jsonrpc_remote *ovsdb_jsonrpc_remote_ref(
     const struct ovsdb_jsonrpc_remote *remote);
 void ovsdb_jsonrpc_remote_unref(const struct ovsdb_jsonrpc_remote *remote);
