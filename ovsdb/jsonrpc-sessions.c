@@ -34,6 +34,7 @@
 #include "reconnect.h"
 #include "row.h"
 #include "server.h"
+#include "seq.h"
 #include "simap.h"
 #include "stream.h"
 #include "table.h"
@@ -554,7 +555,7 @@ ovsdb_jsonrpc_session_create(struct ovsdb_jsonrpc_server *server,
     ovs_refcount_init(&s->refcount);
     ovsdb_jsonrpc_sessions_add(sessions, s);
     s->thread_id = ovsthread_id_self();
-    s->handler = *per_thread_handler_get();
+    s->handler = *thread_handler_get();
 
     /* Let server know about session membership change.  */
     atomic_count_inc(&server->n_sessions);
@@ -1154,7 +1155,7 @@ ovsdb_jsonrpc_sessions_get_memory_usage(const struct ovs_list *sessions,
 bool
 ovsdb_jsonrpc_session_handled_locally(struct ovsdb_jsonrpc_session *s)
 {
-    return s->handler == *per_thread_handler_get();
+    return s->handler == *thread_handler_get();
 }
 
 void
