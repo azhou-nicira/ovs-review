@@ -19,6 +19,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "openvswitch/types.h"
+#include "ovs-atomic.h"
 #include "ovs-thread.h"
 #include "server.h"
 
@@ -44,7 +45,7 @@ ovsdb_thread_sessions_handler(void)
 /* JSON-RPC database server. */
 struct ovsdb_jsonrpc_server {
     struct ovsdb_server up;
-    unsigned int n_sessions;
+    atomic_count n_sessions;
     struct shash remotes;      /* Contains "struct ovsdb_jsonrpc_remote *"s. */
 
     /* Handlers for 'ovs_list' that contains 'ovsdb_jsonrpc_sessions'.
