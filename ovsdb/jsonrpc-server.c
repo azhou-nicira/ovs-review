@@ -124,7 +124,7 @@ static void sessions_thread_exit(struct sessions_thread *);
 
 struct ovsdb_jsonrpc_server {
     struct ovsdb_server up;
-    unsigned int n_sessions;
+    atomic_count n_sessions;   /* Can be updated from multiple threads */
     struct shash remotes;      /* Contains "struct ovsdb_jsonrpc_remote *"s. */
     struct ovs_list all_sessions; /* All 'ovsdb_jsonrpc_session's managed
                                      by the main process. Those are sessions
@@ -441,16 +441,23 @@ void
 ovsdb_jsonrpc_server_get_memory_usage(const struct ovsdb_jsonrpc_server *svr,
                                       struct simap *usage)
 {
-    simap_increase(usage, "sessions", svr->n_sessions);
+    unsigned int n_sessions;
+
+    /* atomic_count_get does not take a const pointer, the cast
+     * is necssary. XXX  */
+    n_sessions = atomic_count_get((struct atomic_count *)&svr->n_sessions);
+    simap_increase(usage, "sessions", n_sessions);
     ovsdb_jsonrpc_session_get_memory_usage_all(svr, usage);
 }
 
 static bool
 ovsdb_jsonrpc_server_use_threads(struct ovsdb_jsonrpc_server *svr) {
     if (svr->n_active_threads != svr->n_max_threads) {
+        unsigned int n_sessions = atomic_count_get(&svr->n_sessions);
+
         /* Look up the number of sessions to decide if there is a need
          * for a new thread.  */
-        size_t n_desired_threads = svr->n_sessions /  N_SESSIONS_THREASHHOLD;
+        size_t n_desired_threads = n_sessions /  N_SESSIONS_THREASHHOLD;
 
         if (n_desired_threads > svr->n_active_threads) {
             sessions_thread_init(&svr->threads[svr->n_active_threads++]);
@@ -504,7 +511,7 @@ ovsdb_jsonrpc_session_create(struct ovsdb_jsonrpc_remote *remote,
     s->js = js;
     s->js_seqno = jsonrpc_session_get_seqno(js);
 
-    server->n_sessions++;
+    atomic_count_inc(&server->n_sessions);
 
     return s;
 }
@@ -524,7 +531,7 @@ ovsdb_jsonrpc_session_close(struct ovsdb_jsonrpc_session *s)
     jsonrpc_session_close(s->js);
     list_remove(&s->node);
     server = ovsdb_jsonrpc_server_cast(s->up.server);
-    server->n_sessions--;
+    atomic_count_dec(&server->n_sessions);
     ovsdb_session_destroy(&s->up);
     free(s);
 }
