@@ -108,10 +108,8 @@ ovsdb_jsonrpc_remote_run(struct ovsdb_jsonrpc_remote *remote)
 
         error = pstream_accept(remote->listener, &stream);
         if (!error) {
-            struct jsonrpc_session *js;
-            js = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
-                                                 remote->dscp);
-            ovsdb_jsonrpc_session_create(remote->server, js, remote);
+            ovsdb_jsonrpc_server_create_session(remote->server, stream,
+                                                remote);
         } else if (error != EAGAIN) {
             VLOG_WARN_RL(&rl, "%s: accept failed: %s",
                          pstream_get_name(remote->listener),
@@ -145,3 +143,9 @@ ovsdb_jsonrpc_remote_options_can_change(
     return (remote->dscp == new_options->dscp);
 }
 
+/* Returns 'dscp' setting in 'remote'.   */
+uint8_t
+ovsdb_jsonrpc_remote_dscp(const struct ovsdb_jsonrpc_remote *remote)
+{
+    return remote->dscp;
+}

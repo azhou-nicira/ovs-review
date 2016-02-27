@@ -31,7 +31,6 @@ ovsdb_jsonrpc_remote_create(struct ovsdb_jsonrpc_server *svr,
                             struct pstream **listener);
 void ovsdb_jsonrpc_remote_destroy(struct ovsdb_jsonrpc_remote *remote);
 
-
 struct ovsdb_jsonrpc_server * ovsdb_jsonrpc_remote_get_server(
     struct ovsdb_jsonrpc_remote *remote);
 
@@ -46,4 +45,5 @@ bool ovsdb_jsonrpc_remote_options_can_change(
     const struct ovsdb_jsonrpc_remote *remote,
     const struct ovsdb_jsonrpc_options *new_options);
 
+uint8_t ovsdb_jsonrpc_remote_dscp(const struct ovsdb_jsonrpc_remote *);
 #endif /* ovsdb/jsonrpc-remote.h */

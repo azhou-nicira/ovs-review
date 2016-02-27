@@ -45,6 +45,12 @@ ovsdb_jsonrpc_default_options(const char *target);
 void ovsdb_jsonrpc_server_set_remotes(struct ovsdb_jsonrpc_server *,
                                       const struct shash *);
 
+void ovsdb_jsonrpc_server_create_session(
+    struct ovsdb_jsonrpc_server *svr,
+    struct stream *stream,
+    struct ovsdb_jsonrpc_remote *remote);
+
+
 /* Status of a single remote connection. */
 struct ovsdb_jsonrpc_remote_status {
     const char *state;
@@ -65,10 +71,9 @@ void ovsdb_jsonrpc_server_free_remote_status(
     struct ovsdb_jsonrpc_remote_status *);
 
 void ovsdb_jsonrpc_server_reconnect(struct ovsdb_jsonrpc_server *);
-
 void ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *);
 void ovsdb_jsonrpc_server_wait(struct ovsdb_jsonrpc_server *);
-size_t ovsdb_jsonrpc_server_sessions_count(
+size_t  ovsdb_jsonrpc_server_sessions_count(
     struct ovsdb_jsonrpc_server *, struct ovsdb_jsonrpc_remote *);
 
 struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_server_first_session(
@@ -86,7 +91,4 @@ void ovsdb_jsonrpc_session_get_status(
     const struct ovsdb_jsonrpc_session *session,
     struct ovsdb_jsonrpc_remote_status *status);
 
-struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_session_create(
-    struct ovsdb_jsonrpc_server *server, struct jsonrpc_session *js,
-    struct ovsdb_jsonrpc_remote *remote);
 #endif /* ovsdb/jsonrpc-server.h */
