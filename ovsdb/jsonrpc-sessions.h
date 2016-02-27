@@ -20,7 +20,7 @@ struct ovs_list;
 struct ovsdb_jsonrpc_remote;
 struct ovsdb_jsonrpc_options;
 struct sessions_handler;
-
+struct seq;
 
 /* Session set. */
 void ovsdb_jsonrpc_sessions_run(struct ovs_list *);

@@ -49,7 +49,7 @@ struct ovsdb_jsonrpc_server {
     atomic_count n_sessions;
     struct shash remotes;      /* Contains "struct ovsdb_jsonrpc_remote *"s. */
 
-    /* Handlers for 'ovs_list' that contains 'ovsdb_jsonrpc_sessions'.
+    /* Handlers a set of 'ovsdb_jsonrpc_sessions'.
      *
      * Each 'handler' handles a set of ovdb_jsonrpc_sessions.
      * When OVSDB runs in a multi-threaded environment, there will be
@@ -64,12 +64,11 @@ struct ovsdb_jsonrpc_server {
      * both 'n_handlers' and 'handlers' are never changed or moved until
      * the server is destroyed.    */
     struct sessions_handler *handlers;
-    unsigned int n_handlers;
 
     /* Threads. */
     /* No need to store 'n_max_threads' here, it can be derived from
-     * 'n_handlers', n_max_threads == n_handlers - 1.  */
-    size_t n_active_threads;
+     * 'n_handlers'.  */
+    unsigned int n_handlers;     /* n_max_threads = n_handlers - 1. */
 };
 
 struct ovsdb_jsonrpc_server *ovsdb_jsonrpc_server_create(size_t n_max_threads);
@@ -95,6 +94,12 @@ ovsdb_jsonrpc_default_options(const char *target);
 void ovsdb_jsonrpc_server_set_remotes(struct ovsdb_jsonrpc_server *,
                                       const struct shash *);
 
+void ovsdb_jsonrpc_server_create_session(
+    struct ovsdb_jsonrpc_server *svr,
+    struct stream *stream,
+    struct ovsdb_jsonrpc_remote *remote);
+
+
 /* Status of a single remote connection. */
 struct ovsdb_jsonrpc_remote_status {
     const char *state;
@@ -120,22 +125,102 @@ void ovsdb_jsonrpc_server_free_remote_status(
     struct ovsdb_jsonrpc_remote_status *);
 
 void ovsdb_jsonrpc_server_reconnect(struct ovsdb_jsonrpc_server *);
-
 void ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *);
 void ovsdb_jsonrpc_server_wait(struct ovsdb_jsonrpc_server *);
-size_t ovsdb_jsonrpc_server_sessions_count(
+size_t  ovsdb_jsonrpc_server_sessions_count(
     struct ovsdb_jsonrpc_server *, struct ovsdb_jsonrpc_remote *);
 
 struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_server_first_session(
-    const struct ovsdb_jsonrpc_server *, const struct ovsdb_jsonrpc_remote *);
+    struct ovsdb_jsonrpc_server *, struct ovsdb_jsonrpc_remote *);
 
-void ovsdb_jsonrpc_server_get_memory_usage(const struct ovsdb_jsonrpc_server *,
+void ovsdb_jsonrpc_server_get_memory_usage(struct ovsdb_jsonrpc_server *,
                                            struct simap *usage);
 
 void ovsdb_jsonrpc_server_add_session(struct ovsdb_jsonrpc_server *,
                                       struct stream *,
                                       struct ovsdb_jsonrpc_remote *,
                                       uint8_t dscp);
+
+/* IPC messages are used to communicate between the main thread and
+ * jsonrpc sessions thread.
+ *
+ * There are three styles of IPC messages.
+ *  * Global Sync.  All threads will be stopped at a barrier,
+ *  except the main handler. Main handler can safly access (read)
+ *  per thread private data, then release the barrier. There is
+ *  only one message of this type, OVSDB_IPC_SYNC.
+ *
+ *  * Message without sync. A thread sends a message to another
+ *  thread without waiting for confirmation that the message
+ *  has been executed. This style of messages reduces the head of
+ *  line blocking for the calling threads of handling the next event.
+ *
+ * * Message with sync. The caller should be blocked until the
+ *   message has been exectued on target thread(s). This style of messages
+ *   ensures that the access to shared objects (by message handlers) has
+ *   finished.
+ *
+ * Summary of Messages:
+ *
+ *  message                SYNC                Usage
+ *  =======                =====          ===============================
+ * OVSDB_IPC_SYNC          global         main handler -> other handlers
+ * OVSDB_IPC_NEW_SESSION    no            main handler -> other handlers
+ * OVSDB_IPC_CLOSE_SESSIONS yes           main handler -> other handlers
+ * OVSDB_IPC_RECONNET       yes           main handler -> other handlers
+ *
+ * Implementation Details:
+ *
+ * - OVSDB_IPC_SYNC
+ * This is generic thread synchronization mechanism that uses
+ * two ovs_barriers. A 'stop' barrier is used to make sure
+ * all handlers threads have reached this barrier before the
+ * main handler can safely operate on per thread data structure,
+ * such as access the sessions list, while all threads spins
+ * on the 'go' barrier, until the main thread is done
+ * and releases the 'go' barrier.
+ *
+ * Note, we don't use this message to change the life cycle of individual
+ * session, following the principle that a session is only created and
+ * destroyed in a single handler.
+ *
+ * - OVSDB_IPC_NEW_SESSION
+ * Create a new jsonrpc session for a given 'stream'.
+ *
+ * - OVSDB_IPC_CLOSE_SESSIONS
+ * Delete all sessions associated with the 'remote'.
+ *
+ * - OVSDB_IPC_RECONNET
+ * Reconnect all sessions associated with a given 'remote'.
+ *
+ * - OVSDB_IPC_SET_OPTIONS
+ * Reset options of all sessions associated with a given 'remote'.
+ */
+#define OVSDB_IPC_MESSAGES \
+       OVSDB_IPC_MESSAGE(SYNC) \
+       OVSDB_IPC_MESSAGE(NEW_SESSION) \
+       OVSDB_IPC_MESSAGE(CLOSE_SESSIONS) \
+       OVSDB_IPC_MESSAGE(RECONNECT) \
+       OVSDB_IPC_MESSAGE(SET_OPTIONS)
+
+enum ovsdb_ipc_type {
+#define OVSDB_IPC_MESSAGE(MSG) OVSDB_IPC_##MSG,
+    OVSDB_IPC_MESSAGES
+#undef OVSDB_IPC_MESSAGE
+    OVSDB_IPC_N_MESSAGES,
+};
+
+/* Generic IPC data structure. This data structure should be embedded in
+ * the definition of specific messages.  */
+struct ovsdb_ipc {
+    struct ovs_list list;      /* List node in sessions_handler's ipc_queue. */
+    size_t size;
+    enum ovsdb_ipc_type message;
+};
+
+void ovsdb_ipc_init(struct ovsdb_ipc *ipc, enum ovsdb_ipc_type message,
+                    size_t size);
+
 #endif /* OVSDB_JSONRPC_SERVER_H */
 
 /* OVSDB server Multi-Threading design
