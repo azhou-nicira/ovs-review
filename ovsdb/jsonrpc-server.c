@@ -337,9 +337,13 @@ void
 ovsdb_jsonrpc_server_get_memory_usage(const struct ovsdb_jsonrpc_server *svr,
                                       struct simap *usage)
 {
-    struct ovs_list *sessions = main_handler_sessions(svr);
-    ovsdb_jsonrpc_sessions_get_memory_usage(sessions, usage);
-    simap_increase(usage, "sessions", svr->n_sessions);
+    unsigned int n_sessions;
+
+    /* The following type cast is necessary since atomic_count_get() does not
+     * take a const pointer.  */
+    n_sessions = atomic_count_get((struct atomic_count *)&svr->n_sessions);
+    simap_increase(usage, "sessions", n_sessions);
+    ovsdb_jsonrpc_sessions_get_memory_usage(main_handler_sessions(svr), usage);
 }
 
 /* Get the first session within the main handler sessions that matches
