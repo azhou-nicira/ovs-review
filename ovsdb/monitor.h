@@ -17,8 +17,10 @@
 #ifndef OVSDB_MONITOR_H
 #define OVSDB_MONITOR_H
 
+struct ovsdb;
 struct ovsdb_monitor;
 struct ovsdb_jsonrpc_monitor;
+struct simap;
 
 enum ovsdb_monitor_selection {
     OJMS_INITIAL = 1 << 0,      /* All rows when monitor is created. */

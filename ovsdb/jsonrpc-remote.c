@@ -152,6 +152,13 @@ ovsdb_jsonrpc_remote_ref(const struct ovsdb_jsonrpc_remote *remote_)
     return remote;
 }
 
+/* Returns 'dscp' setting in 'remote'.   */
+uint8_t
+ovsdb_jsonrpc_remote_dscp(const struct ovsdb_jsonrpc_remote *remote)
+{
+    return remote->dscp;
+}
+
 void
 ovsdb_jsonrpc_remote_unref(const struct ovsdb_jsonrpc_remote *remote_)
 {

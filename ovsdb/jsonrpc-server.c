@@ -15,14 +15,12 @@
 
 #include <config.h>
 
-#include "jsonrpc-server.h"
-
 #include <errno.h>
-
 #include "bitmap.h"
 #include "column.h"
 #include "json.h"
 #include "jsonrpc.h"
+#include "jsonrpc-server.h"
 #include "jsonrpc-remote.h"
 #include "jsonrpc-sessions.h"
 #include "latch.h"
@@ -35,8 +33,10 @@
 #include "ovs-thread.h"
 #include "poll-loop.h"
 #include "reconnect.h"
+#include "random.h"
 #include "row.h"
 #include "server.h"
+#include "seq.h"
 #include "simap.h"
 #include "stream.h"
 #include "table.h"
@@ -51,24 +51,59 @@ DEFINE_EXTERN_PER_THREAD_DATA(per_thread_handler, NULL);
 struct ovsdb_jsonrpc_remote;
 struct ovsdb_jsonrpc_session;
 
-
 /* Sessions handler */
 struct sessions_handler {
     struct ovs_list all_sessions;  /* Holds 'ovs_jsonrpc_sessions' that runs
                                       on the same thread, */
+
+    /* IPC queue for receiving ipc messsages from other handlers. */
+    struct ovs_mutex ipc_queue_mutex;
+    struct ovs_list ipc_queue OVS_GUARDED; /* by 'ipc_queue_mutex' */
+    struct seq *ipc_queue_seq;
+    uint64_t last_ipc_seq;
+
     bool use_pthread;              /* Starts a pthread for this sessions? */
 
-    /* The following members are not initialized if 'use_pthread' is false. */
+    /* Those are only used when 'use_pthread' is true. */
     pthread_t thread;
     struct latch exit_latch;
 };
 
 static void sessions_handler_init(struct sessions_handler *, bool);
 static void sessions_handler_destroy(struct sessions_handler *);
-static struct sessions_handler *main_handler(
-    const struct ovsdb_jsonrpc_server *);
-static struct ovs_list *main_handler_sessions(
-    const struct ovsdb_jsonrpc_server *);
+static void sessions_handler_ipc_run(struct sessions_handler *);
+static void sessions_handler_ipc_wait(struct sessions_handler *);
+
+static struct ovs_list *handler_sessions(struct sessions_handler *handler);
+static struct sessions_handler *main_handler(struct ovsdb_jsonrpc_server *);
+static struct ovs_list *main_handler_sessions(struct ovsdb_jsonrpc_server *);
+
+/* IPC message */
+/* IPC message helper functions */
+typedef void (*ovsdb_ipc_handler_t)(struct sessions_handler *,
+                                    struct ovsdb_ipc *);
+typedef void (*ovsdb_ipc_dtor_t)(struct ovsdb_ipc *);
+typedef struct ovsdb_ipc *(*ovsdb_ipc_clone_t)(struct ovsdb_ipc *);
+
+static struct ovsdb_ipc_ops {
+    ovsdb_ipc_handler_t handler;
+    ovsdb_ipc_dtor_t dtor;
+    ovsdb_ipc_clone_t clone;
+} ipc_ops[OVSDB_IPC_N_MESSAGES];
+
+static struct ovsdb_ipc *ovsdb_ipc_clone(struct ovsdb_ipc *);
+static struct ovsdb_ipc *ovsdb_ipc_dup(struct ovsdb_ipc *);
+static struct ovsdb_ipc_ops *ipc_ops_get(enum ovsdb_ipc_type);
+static void ovsdb_ipc_broadcast(struct ovsdb_jsonrpc_server *svr,
+                                struct ovsdb_ipc *ipc);
+static void ovsdb_ipc_sendto(struct sessions_handler *handler,
+                             struct ovsdb_ipc *ipc);
+
+/* IPC implemenation helpers. */
+static void main_handler_execute_exclusive(
+    struct ovsdb_jsonrpc_server *svr,
+    void (*exec)(struct ovsdb_jsonrpc_server *, void *arg1, void *arg2),
+    void *arg1, void *arg2);
 
 /* Remotes. */
 static struct ovsdb_jsonrpc_remote *ovsdb_jsonrpc_server_add_remote(
@@ -80,7 +115,6 @@ static void ovsdb_jsonrpc_server_del_remote(struct ovsdb_jsonrpc_server *,
 
 
 /* JSON-RPC database server. */
-
 /* Creates and returns a new server to provide JSON-RPC access to an OVSDB.
  *
  * 'max_threads' limits the number of threads it can create.
@@ -100,10 +134,17 @@ ovsdb_jsonrpc_server_create(size_t n_max_threads)
     svr->handlers = xmalloc(sizeof *svr->handlers * n_handlers);
     for (i = 0; i < svr->n_handlers; i++) {
         struct sessions_handler *handler = &svr->handlers[i];
-        sessions_handler_init(handler, handler != main_handler(svr));
+        bool use_pthread = handler != main_handler(svr);
+        sessions_handler_init(handler, use_pthread);
     }
 
     return svr;
+}
+
+static inline bool
+single_handler(struct ovsdb_jsonrpc_server *svr)
+{
+    return svr->n_handlers == 1;
 }
 
 /* Adds 'db' to the set of databases served out by 'svr'.  Returns true if
@@ -125,6 +166,61 @@ ovsdb_jsonrpc_server_add_db(struct ovsdb_jsonrpc_server *svr, struct ovsdb *db)
     return ovsdb_server_add_db(&svr->up, db);
 }
 
+struct ovsdb_ipc_set_options {
+    struct ovsdb_ipc up;
+    struct ovsdb_jsonrpc_remote *remote;
+    struct ovsdb_jsonrpc_options *options;
+    struct ovs_barrier *done;
+};
+
+static struct ovsdb_ipc *
+ovsdb_ipc_set_options_create(struct ovsdb_jsonrpc_remote *remote,
+                             struct ovsdb_jsonrpc_options *options,
+                             struct ovs_barrier *done)
+{
+    struct ovsdb_ipc_set_options *ipc;
+
+    ipc = xmalloc(sizeof *ipc);
+    ovsdb_ipc_init(&ipc->up, OVSDB_IPC_SET_OPTIONS, sizeof *ipc);
+    ipc->remote = remote;
+    ipc->options = options;
+    ipc->done = done;
+
+    return &ipc->up;
+}
+
+static void
+handle_SET_OPTIONS(struct sessions_handler *handler, struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_set_options *ipc;
+    struct ovs_list *sessions = handler_sessions(handler);
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_set_options, up);
+    ovsdb_jsonrpc_sessions_set_options(sessions, ipc->remote, ipc->options);
+    ovs_barrier_block(ipc->done);
+}
+
+static void
+dtor_SET_OPTIONS(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_set_options *ipc;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_set_options, up);
+    ovsdb_jsonrpc_remote_unref(ipc->remote);
+    free(ipc);
+}
+
+static struct ovsdb_ipc *
+clone_SET_OPTIONS(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_set_options *ipc;
+
+    ipc = CONTAINER_OF(ovsdb_ipc_dup(ipc_), struct ovsdb_ipc_set_options, up);
+    ovsdb_jsonrpc_remote_ref(ipc->remote);
+
+    return &ipc->up;
+}
+
 /* Sets 'svr''s current set of remotes to the names in 'new_remotes', with
  * options in the struct ovsdb_jsonrpc_options supplied as the data values.
  *
@@ -134,7 +230,6 @@ void
 ovsdb_jsonrpc_server_set_remotes(struct ovsdb_jsonrpc_server *svr,
                                  const struct shash *new_remotes)
 {
-    struct ovs_list *sessions = main_handler_sessions(svr);
     struct shash_node *node, *next;
 
     SHASH_FOR_EACH_SAFE (node, next, &svr->remotes) {
@@ -150,8 +245,9 @@ ovsdb_jsonrpc_server_set_remotes(struct ovsdb_jsonrpc_server *svr,
         }
     }
     SHASH_FOR_EACH (node, new_remotes) {
-        const struct ovsdb_jsonrpc_options *options = node->data;
+        struct ovsdb_jsonrpc_options *options = node->data;
         struct ovsdb_jsonrpc_remote *remote;
+        struct ovs_barrier done;
 
         remote = shash_find_data(&svr->remotes, node->name);
         if (!remote) {
@@ -161,7 +257,20 @@ ovsdb_jsonrpc_server_set_remotes(struct ovsdb_jsonrpc_server *svr,
             }
         }
 
-        ovsdb_jsonrpc_sessions_set_options(sessions, remote, options);
+        if (!single_handler(svr)) {
+            struct ovsdb_ipc *ipc;
+            ovs_barrier_init(&done, svr->n_handlers);
+            ipc = ovsdb_ipc_set_options_create(remote, options, &done);
+            ovsdb_ipc_broadcast(svr, ipc);
+        }
+
+        ovsdb_jsonrpc_sessions_set_options(main_handler_sessions(svr),
+                                           remote, options);
+
+        if (!single_handler(svr)) {
+            ovs_barrier_block(&done);
+            ovs_barrier_destroy(&done);
+        }
     }
 }
 
@@ -186,15 +295,80 @@ ovsdb_jsonrpc_server_add_remote(struct ovsdb_jsonrpc_server *svr,
     return remote;
 }
 
+struct ovsdb_ipc_close_sessions {
+    struct ovsdb_ipc up;
+    struct ovsdb_jsonrpc_remote *remote;
+    struct ovs_barrier *done;
+};
+
+static struct ovsdb_ipc *
+ovsdb_ipc_close_sessions_create(struct ovsdb_jsonrpc_remote *remote,
+                                struct ovs_barrier *done)
+{
+    struct ovsdb_ipc_close_sessions *ipc = xmalloc(sizeof *ipc);
+
+    ovsdb_ipc_init(&ipc->up, OVSDB_IPC_CLOSE_SESSIONS, sizeof *ipc);
+    ipc->remote = remote;
+    ipc->done = done;
+
+    return &ipc->up;
+}
+
+static void
+handle_CLOSE_SESSIONS(struct sessions_handler *handler,
+                      struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_close_sessions *ipc;
+    struct ovs_list *sessions = handler_sessions(handler);
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_close_sessions, up);
+    ovsdb_jsonrpc_sessions_close(sessions, ipc->remote);
+    ovs_barrier_block(ipc->done);
+}
+
+static void
+dtor_CLOSE_SESSIONS(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_close_sessions *ipc;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_close_sessions, up);
+    ovsdb_jsonrpc_remote_unref(ipc->remote);
+}
+
+static struct ovsdb_ipc *
+clone_CLOSE_SESSIONS(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_close_sessions *ipc;
+
+    ipc = CONTAINER_OF(ovsdb_ipc_dup(ipc_),
+                       struct ovsdb_ipc_close_sessions, up);
+    ovsdb_jsonrpc_remote_ref(ipc->remote);
+
+    return &ipc->up;
+}
+
 static void
 ovsdb_jsonrpc_server_del_remote(struct ovsdb_jsonrpc_server *svr,
-                                 struct shash_node *node)
+                                struct shash_node *node)
 {
     struct ovsdb_jsonrpc_remote *remote = node->data;
-    struct ovs_list *sessions;
+    struct ovs_barrier done;
 
-    sessions = main_handler_sessions(svr);
-    ovsdb_jsonrpc_sessions_close(sessions, remote);
+    if (!single_handler(svr)) {
+        struct ovsdb_ipc *ipc;
+
+        ovs_barrier_init(&done, svr->n_handlers);
+        ipc = ovsdb_ipc_close_sessions_create(remote, &done);
+        ovsdb_ipc_broadcast(svr, ipc);
+    }
+
+    ovsdb_jsonrpc_sessions_close(main_handler_sessions(svr), remote);
+
+    if (!single_handler(svr)) {
+        ovs_barrier_block(&done);
+        ovs_barrier_destroy(&done);
+    }
+
     ovsdb_jsonrpc_remote_destroy(remote);
     shash_delete(&svr->remotes, node);
     ovsdb_jsonrpc_remote_unref(remote);
@@ -296,12 +470,30 @@ ovsdb_jsonrpc_server_destroy(struct ovsdb_jsonrpc_server *svr)
     free(svr);
 }
 
+static void
+get_sessions_count(struct ovsdb_jsonrpc_server *svr, void *remote_,
+                   void *total_)
+{
+    struct ovsdb_jsonrpc_remote *remote = remote_;
+    size_t *total = total_;
+    size_t i;
+
+    *total = 0;
+    for (i = 0; i < svr->n_handlers; i++) {
+        struct sessions_handler *handler = &svr->handlers[i];
+        *total += ovsdb_jsonrpc_sessions_count(handler_sessions(handler),
+                                               remote);
+    }
+}
+
 size_t
 ovsdb_jsonrpc_server_sessions_count(struct ovsdb_jsonrpc_server *svr,
                                     struct ovsdb_jsonrpc_remote *remote)
 {
-    struct ovs_list *sessions = main_handler_sessions(svr);
-    return ovsdb_jsonrpc_sessions_count(sessions, remote);
+    size_t total;
+
+    main_handler_execute_exclusive(svr, get_sessions_count, remote, &total);
+    return total;
 }
 
 struct ovsdb_jsonrpc_options *
@@ -315,25 +507,92 @@ ovsdb_jsonrpc_default_options(const char *target)
     return options;
 }
 
+struct ovsdb_ipc_reconnect {
+    struct ovsdb_ipc up;
+    struct ovsdb_jsonrpc_remote *remote;
+};
+
+static struct ovsdb_ipc *
+ovsdb_ipc_reconnect_create(struct ovsdb_jsonrpc_remote *remote)
+{
+    struct ovsdb_ipc_reconnect *ipc;
+
+    ipc = xmalloc(sizeof *ipc);
+    ovsdb_ipc_init(&ipc->up, OVSDB_IPC_RECONNECT, sizeof *ipc);
+    ipc->remote = remote;
+
+    return &ipc->up;
+}
+
+static void
+handle_RECONNECT(struct sessions_handler *handler, struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_reconnect *ipc;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_reconnect, up);
+    ovsdb_jsonrpc_sessions_reconnect(handler_sessions(handler), ipc->remote);
+}
+
+static void
+dtor_RECONNECT(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_reconnect *ipc;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_reconnect, up);
+    ovsdb_jsonrpc_remote_unref(ipc->remote);
+}
+
+static struct ovsdb_ipc *
+clone_RECONNECT(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_reconnect *ipc;
+
+    ipc = CONTAINER_OF(ovsdb_ipc_dup(ipc_), struct ovsdb_ipc_reconnect, up);
+    ovsdb_jsonrpc_remote_ref(ipc->remote);
+
+    return &ipc->up;
+}
+
 /* Forces all of the JSON-RPC sessions managed by 'svr' to disconnect and
  * reconnect. */
 void
 ovsdb_jsonrpc_server_reconnect(struct ovsdb_jsonrpc_server *svr)
 {
-    struct ovs_list *sessions = main_handler_sessions(svr);
     struct shash_node *node;
 
     SHASH_FOR_EACH (node, &svr->remotes) {
         struct ovsdb_jsonrpc_remote *remote = node->data;
 
-        ovsdb_jsonrpc_sessions_reconnect(sessions, remote);
+        if (!single_handler(svr)) {
+            struct ovsdb_ipc *ipc;
+            ipc = ovsdb_ipc_reconnect_create(remote);
+            ovsdb_ipc_broadcast(svr, ipc);
+        }
+
+        /* Main handler sessions */
+        ovsdb_jsonrpc_sessions_reconnect(main_handler_sessions(svr),
+                                         remote);
+    }
+}
+
+static void
+get_memory_usage(struct ovsdb_jsonrpc_server *svr, void *usage_,
+                 void *unsed OVS_UNUSED)
+{
+    size_t i;
+    struct simap *usage = usage_;
+
+    for (i = 0; i < svr->n_handlers; i++) {
+        struct sessions_handler *handler = &svr->handlers[i];
+        ovsdb_jsonrpc_sessions_get_memory_usage(handler_sessions(handler),
+                                                usage);
     }
 }
 
 /* Adds some memory usage statistics for 'svr' into 'usage', for use with
  * memory_report(). */
 void
-ovsdb_jsonrpc_server_get_memory_usage(const struct ovsdb_jsonrpc_server *svr,
+ovsdb_jsonrpc_server_get_memory_usage(struct ovsdb_jsonrpc_server *svr,
                                       struct simap *usage)
 {
     unsigned int n_sessions;
@@ -342,17 +601,74 @@ ovsdb_jsonrpc_server_get_memory_usage(const struct ovsdb_jsonrpc_server *svr,
      * take a const pointer.  */
     n_sessions = atomic_count_get((struct atomic_count *)&svr->n_sessions);
     simap_increase(usage, "sessions", n_sessions);
-    ovsdb_jsonrpc_sessions_get_memory_usage(main_handler_sessions(svr), usage);
+    main_handler_execute_exclusive(svr, get_memory_usage, usage, NULL);
 }
 
 /* Get the first session within the main handler sessions that matches
  * the 'remote'. */
 struct ovsdb_jsonrpc_session *
-ovsdb_jsonrpc_server_first_session(const struct ovsdb_jsonrpc_server *svr,
-                                   const struct ovsdb_jsonrpc_remote *remote)
+ovsdb_jsonrpc_server_first_session(struct ovsdb_jsonrpc_server *svr,
+                                   struct ovsdb_jsonrpc_remote *remote)
 {
     struct ovs_list *sessions = main_handler_sessions(svr);
     return ovsdb_jsonrpc_sessions_first(sessions, remote);
+}
+
+struct ovsdb_ipc_new_session {
+    struct ovsdb_ipc up;
+    struct stream *stream;
+    struct ovsdb_jsonrpc_remote *remote;
+    struct ovsdb_jsonrpc_server *svr;
+    uint8_t dscp;
+};
+
+static struct ovsdb_ipc *
+ovsdb_ipc_new_session_create(struct stream *stream,
+                             struct ovsdb_jsonrpc_remote *remote,
+                             struct ovsdb_jsonrpc_server *svr,
+                             uint8_t dscp)
+{
+    struct ovsdb_ipc_new_session *ipc;
+
+    ipc = xmalloc(sizeof *ipc);
+    ovsdb_ipc_init(&ipc->up, OVSDB_IPC_NEW_SESSION, sizeof *ipc);
+    ipc->stream = stream;
+    ipc->remote = ovsdb_jsonrpc_remote_ref(remote);
+    ipc->svr = svr;
+    ipc->dscp = dscp;
+
+    return &ipc->up;
+}
+
+static void
+handle_NEW_SESSION(struct sessions_handler *handler, struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_new_session *ipc;
+    struct jsonrpc_session *js;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_new_session, up);
+    js = jsonrpc_session_open_unreliably(jsonrpc_open(ipc->stream), ipc->dscp);
+    ovsdb_jsonrpc_session_create(ipc->svr, js, ipc->remote,
+                                 handler_sessions(handler));
+}
+
+static void
+dtor_NEW_SESSION(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_new_session *ipc;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_new_session, up);
+    ovsdb_jsonrpc_remote_unref(ipc->remote);
+}
+
+static struct ovsdb_ipc *
+clone_NEW_SESSION(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_new_session *ipc;
+
+    ipc = CONTAINER_OF(ovsdb_ipc_dup(ipc_), struct ovsdb_ipc_new_session, up);
+    ovsdb_jsonrpc_remote_ref(ipc->remote);
+    return &ipc->up;
 }
 
 void
@@ -361,10 +677,23 @@ ovsdb_jsonrpc_server_add_session(struct ovsdb_jsonrpc_server *svr,
                                  struct ovsdb_jsonrpc_remote *remote,
                                  uint8_t dscp)
 {
-    struct jsonrpc_session *js;
+    struct sessions_handler *handler;
 
-    js = jsonrpc_session_open_unreliably(jsonrpc_open(stream), dscp);
-    ovsdb_jsonrpc_session_create(svr, js, remote, main_handler_sessions(svr));
+    /* Randomly select a handler for the new sessions. If the main
+     * handler is selected, create it locally. Otherwise, send an
+     * IPC message to the selected handler. */
+    handler = &svr->handlers[random_uint32() % svr->n_handlers];
+
+    if (handler == main_handler(svr)) {
+        struct jsonrpc_session *js;
+        js = jsonrpc_session_open_unreliably(jsonrpc_open(stream), dscp);
+        ovsdb_jsonrpc_session_create(svr, js, remote,
+                                     main_handler_sessions(svr));
+    } else {
+        struct ovsdb_ipc *ipc;
+        ipc = ovsdb_ipc_new_session_create(stream, remote, svr, dscp);
+        ovsdb_ipc_sendto(handler, ipc);
+    }
 }
 
 
@@ -376,6 +705,12 @@ sessions_handler_main(void * h_)
     *per_thread_handler_get() = handler;
     VLOG_DBG("sessions handler thread created");
     while (!latch_is_set(&handler->exit_latch)) {
+        sessions_handler_ipc_run(handler);
+        ovsdb_jsonrpc_sessions_run(&handler->all_sessions);
+
+        sessions_handler_ipc_wait(handler);
+        ovsdb_jsonrpc_sessions_wait(&handler->all_sessions);
+
         latch_wait(&handler->exit_latch);
         poll_block();
     }
@@ -387,6 +722,10 @@ static void
 sessions_handler_init(struct sessions_handler *handler, bool use_pthread)
 {
     ovs_list_init(&handler->all_sessions);
+    ovs_mutex_init(&handler->ipc_queue_mutex);
+    ovs_list_init(&handler->ipc_queue);
+    handler->ipc_queue_seq = seq_create();
+    handler->last_ipc_seq = seq_read(handler->ipc_queue_seq);
 
     handler->use_pthread = use_pthread;
     if (use_pthread) {
@@ -408,18 +747,27 @@ sessions_handler_destroy(struct sessions_handler *handler)
         xpthread_join(handler->thread, NULL);
         latch_destroy(&handler->exit_latch);
     }
+
+    ovs_mutex_destroy(&handler->ipc_queue_mutex);
+    seq_destroy(handler->ipc_queue_seq);
+}
+
+static struct ovs_list *
+handler_sessions(struct sessions_handler *handler)
+{
+    return &handler->all_sessions;
 }
 
 static struct sessions_handler *
-main_handler(const struct ovsdb_jsonrpc_server *svr)
+main_handler(struct ovsdb_jsonrpc_server *svr)
 {
     return &svr->handlers[0];
 }
 
 static struct ovs_list *
-main_handler_sessions(const struct ovsdb_jsonrpc_server *svr)
+main_handler_sessions(struct ovsdb_jsonrpc_server *svr)
 {
-    return &main_handler(svr)->all_sessions;
+    return handler_sessions(main_handler(svr));
 }
 
 
@@ -436,3 +784,198 @@ ovsdb_jsonrpc_server_unlock(struct ovsdb_jsonrpc_server *svr)
 {
     ovs_mutex_unlock(&svr->up.mutex);
 }
+
+static void
+sessions_handler_ipc_run(struct sessions_handler *handler)
+{
+    uint64_t new_ipc_seq;
+
+    new_ipc_seq = seq_read(handler->ipc_queue_seq);
+    if (new_ipc_seq != handler->last_ipc_seq) {
+        ovs_mutex_lock(&handler->ipc_queue_mutex);
+        while (!ovs_list_is_empty(&handler->ipc_queue)) {
+             struct ovsdb_ipc *ipc;
+             struct ovs_list *node;
+
+             node = ovs_list_pop_front(&handler->ipc_queue);
+             ipc = CONTAINER_OF(node, struct ovsdb_ipc, list);
+
+             /* Handle IPC message. */
+             ovsdb_ipc_handler_t ipc_handler;
+             ipc_handler = ipc_ops_get(ipc->message)->handler;
+             (*ipc_handler)(handler, ipc);
+
+             /* Destroy IPC message. */
+             ovsdb_ipc_dtor_t ipc_dtor;
+             ipc_dtor = ipc_ops_get(ipc->message)->dtor;
+             (*ipc_dtor)(ipc);
+        }
+        ovs_mutex_unlock(&handler->ipc_queue_mutex);
+        handler->last_ipc_seq = new_ipc_seq;
+    }
+}
+
+static void
+sessions_handler_ipc_wait(struct sessions_handler *handler)
+{
+    seq_wait(handler->ipc_queue_seq, handler->last_ipc_seq);
+}
+
+
+void
+ovsdb_ipc_init(struct ovsdb_ipc *ipc, enum ovsdb_ipc_type message, size_t size)
+{
+    ipc->message = message;
+    ipc->size = size;
+    ovs_list_init(&ipc->list);
+}
+
+/* Allocates memory and duplicate the content of 'ipc'.
+ *
+ * Note, this function does not update reference counts of pointers
+ * contained within 'ipc'.  It is a helper function for implementing per
+ * IPC message's clone() functions, User should call 'ovsdb_ipc_clone()'
+ * instead.   */
+static struct ovsdb_ipc *
+ovsdb_ipc_dup(struct ovsdb_ipc *ipc)
+{
+    struct ovsdb_ipc *clone = xmalloc(ipc->size);
+    memcpy(clone, ipc, ipc->size);
+    ovs_list_init(&clone->list);
+
+    return clone;
+}
+
+static struct ovsdb_ipc *
+ovsdb_ipc_clone(struct ovsdb_ipc *ipc)
+{
+    ovsdb_ipc_clone_t clone = ipc_ops_get(ipc->message)->clone;
+    return (*clone)(ipc);
+}
+
+static struct ovsdb_ipc_ops *
+ipc_ops_get(enum ovsdb_ipc_type message)
+{
+    ovs_assert(message < OVSDB_IPC_N_MESSAGES);
+    return &ipc_ops[message];
+}
+
+/* Send the 'ipc' to 'handler'. The receiving handler is responsible for
+ * freeing the memory of 'ipc'.   */
+static void
+ovsdb_ipc_sendto(struct sessions_handler *handler, struct ovsdb_ipc *ipc)
+{
+    ovs_mutex_lock(&handler->ipc_queue_mutex);
+    ovs_list_push_back(&handler->ipc_queue, &ipc->list);
+    ovs_mutex_unlock(&handler->ipc_queue_mutex);
+    seq_change(handler->ipc_queue_seq);
+}
+
+/* Broadcast the IPC message to all handlers execpt the main handler. 'ipc'
+ * will be cloned for each handler. The receiving threads are responsible for
+ * freeing the memory of 'ipc'.  Caller should consider 'ipc' has been freed.
+ */
+static void
+ovsdb_ipc_broadcast(struct ovsdb_jsonrpc_server *svr,
+                    struct ovsdb_ipc *ipc_)
+{
+    ovs_assert(!single_handler(svr));
+
+    for (size_t i = 1; i < svr->n_handlers; i++) {
+        struct sessions_handler *handler = &svr->handlers[i];
+        struct ovsdb_ipc *ipc;
+
+        /* Send the 'ipc_' to the last handler. Send its clones to
+         * all other handlers. */
+        ipc = (i != svr->n_handlers - 1) ? ovsdb_ipc_clone(ipc_) : ipc_;
+        ovsdb_ipc_sendto(handler, ipc);
+    }
+}
+
+struct ovsdb_ipc_sync {
+    struct ovsdb_ipc up;
+    struct ovs_barrier *stop;
+    struct ovs_barrier *go;
+};
+
+static struct ovsdb_ipc *
+ovsdb_ipc_sync_create(struct ovs_barrier *stop, struct ovs_barrier *go)
+{
+    struct ovsdb_ipc_sync *ipc;
+
+    ipc = xmalloc(sizeof *ipc);
+    ovsdb_ipc_init(&ipc->up, OVSDB_IPC_SYNC, sizeof *ipc);
+
+    ipc->stop = stop;
+    ipc->go = go;
+
+    return &ipc->up;
+}
+
+static void
+handle_SYNC(struct sessions_handler *handler OVS_UNUSED,
+            struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_sync *ipc;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_sync, up);
+
+    ovs_barrier_block(ipc->stop);
+    ovs_barrier_block(ipc->go);
+}
+
+static void
+dtor_SYNC(struct ovsdb_ipc *ipc_)
+{
+     free(ipc_);
+}
+
+static struct ovsdb_ipc *
+clone_SYNC(struct ovsdb_ipc *ipc_)
+{
+    return ovsdb_ipc_dup(ipc_);
+}
+
+/* Sync all handlers before execute 'exec'.
+ *
+ * This is a helper function for using OVSDB_IPC_SYNC.
+ *
+ * For servers with a single handler, 'exec' is called directly.
+ *
+ * For servers with mulitple handlers, A OVSDB_IPC_SYNC will be broadcasted
+ * to all threads ( non-main handlers), to ensure 'exec' is executed
+ * race free.
+ */
+static void
+main_handler_execute_exclusive(struct ovsdb_jsonrpc_server *svr,
+                               void (*exec)(struct ovsdb_jsonrpc_server *,
+                                            void *arg1, void *arg2),
+                               void* arg1, void *arg2)
+{
+    if (single_handler(svr)) {
+        (*exec)(svr, arg1, arg2);
+        return;
+    }
+
+    struct ovsdb_ipc *ipc;
+    struct ovs_barrier stop, go;
+
+    ovs_barrier_init(&stop, svr->n_handlers);
+    ovs_barrier_init(&go, svr->n_handlers);
+
+    ipc = ovsdb_ipc_sync_create(&stop, &go);
+    ovsdb_ipc_broadcast(svr, ipc);
+
+    ovs_barrier_block(&stop);
+    (*exec)(svr, arg1, arg2);
+    ovs_barrier_block(&go);
+
+    ovs_barrier_destroy(&stop);
+    ovs_barrier_destroy(&go);
+}
+
+static struct ovsdb_ipc_ops ipc_ops[OVSDB_IPC_N_MESSAGES] = {
+#define OVSDB_IPC_MESSAGE(MSG) {handle_##MSG, dtor_##MSG, clone_##MSG},
+    OVSDB_IPC_MESSAGES
+#undef OVSDB_IPC_MESSAGE
+};

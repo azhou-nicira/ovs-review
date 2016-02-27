@@ -34,6 +34,7 @@
 #include "reconnect.h"
 #include "row.h"
 #include "server.h"
+#include "seq.h"
 #include "simap.h"
 #include "stream.h"
 #include "table.h"
