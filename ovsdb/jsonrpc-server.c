@@ -113,6 +113,8 @@ static struct json *ovsdb_jsonrpc_monitor_compose_update(
 struct sessions_thread {
     pthread_t thread;
 
+    struct ovs_list all_sessions;
+
     /* Controls thread exit. */
     struct latch exit_latch;
 
@@ -127,7 +129,13 @@ static void sessions_thread_init(struct sessions_thread *);
 static void sessions_thread_exit(struct sessions_thread *);
 static void sessions_thread_command_run(struct sessions_thread *);
 static void sessions_thread_command_wait(struct sessions_thread *);
-
+struct ipc_msg;
+static void sessions_thread_add_new_session(struct sessions_thread *thread,
+                                  struct ipc_msg *);
+static void sessions_thread_delete_sessions(struct sessions_thread *thread,
+                                  struct ipc_msg *);
+static void sessions_thread_reconnect_sessions(struct sessions_thread *thread,
+                                  struct ipc_msg *);
 
 /* IPC messages are used to communicate between the main thread and
  * jsonrpc sessions thread.
@@ -161,8 +169,10 @@ struct ipc_msg {
 
 struct ipc_msg_add_session_command {
     struct ipc_msg up;
-    const struct stream *stream;
-    const void *remote;
+    struct stream *stream;
+    struct ovsdb_jsonrpc_server *server;
+    void *remote;
+    uint8_t dscp;
 };
 
 struct ipc_msg_delete_sessions_command {
@@ -175,9 +185,10 @@ struct ipc_msg_reconnect_sessions_command {
     const void *remote;
 };
 
-static char *ipc_msg_to_str(enum ipc_msg_type msg_type);
+// static char *ipc_msg_to_str(enum ipc_msg_type msg_type);
 static struct ipc_msg *ipc_create_add_session_command(
-    const struct stream* stream, const void *remote);
+    struct stream* stream, struct ovsdb_jsonrpc_server *, void *remote,
+    uint8_t dscp);
 static struct ipc_msg *ipc_create_delete_sessions_command(const void *remote);
 static struct ipc_msg *ipc_create_reconnect_sessions_command(
     const void *remote);
@@ -192,7 +203,6 @@ struct ovsdb_jsonrpc_server {
     atomic_count n_sessions;   /* Can be updated from multiple threads */
     struct shash remotes;      /* Contains "struct ovsdb_jsonrpc_remote *"s. */
     struct ovs_list all_sessions; /* All 'ovsdb_jsonrpc_session's.   */
-
 
     /* Threads. */
     size_t n_max_threads;
@@ -229,6 +239,8 @@ static void ovsdb_jsonrpc_server_close_sessions(struct ovsdb_jsonrpc_server *,
 struct ovsdb_jsonrpc_remote {
     struct ovsdb_jsonrpc_server *server;
     struct pstream *listener;   /* Listener, if passive. */
+    atomic_count n_sessions;
+    struct ovsdb_jsonrpc_session *session;
     uint8_t dscp;
 };
 
@@ -557,7 +569,8 @@ ovsdb_jsonrpc_server_create_session(struct ovsdb_jsonrpc_server *svr,
         struct ipc_msg *msg;
 
         ovs_assert(thread);
-        msg = ipc_create_add_session_command(stream, remote);
+        msg = ipc_create_add_session_command(stream, svr, remote,
+                                             remote->dscp);
         send_ipc_msg(thread, msg);
     }
 }
@@ -566,16 +579,11 @@ static void
 ovsdb_jsonrpc_server_close_sessions(struct ovsdb_jsonrpc_server *svr,
                                     const void *remote)
 {
-    size_t i;
+    struct ipc_msg *msg;
 
     /* Close all sesions in threads.  */
-    for (i = 0; i < svr->n_active_threads; i++) {
-         struct ipc_msg *msg;
-         struct sessions_thread *thread = &svr->threads[i];
-
-         msg = ipc_create_delete_sessions_command(remote);
-         send_ipc_msg(thread, msg);
-    }
+    msg = ipc_create_delete_sessions_command(remote);
+    broadcast_ipc_msg(svr, msg);
 
     /* Close local sessions.  */
     ovsdb_jsonrpc_sessions_close(&svr->all_sessions, remote);
@@ -610,25 +618,51 @@ static void ovsdb_jsonrpc_session_got_notify(struct ovsdb_jsonrpc_session *,
                                              struct jsonrpc_msg *);
 
 static struct ovsdb_jsonrpc_session *
+ovsdb_jsonrpc_session_create__(void *remote,
+                               struct ovsdb_jsonrpc_server *server,
+                               struct jsonrpc_session *js)
+{
+    struct ovsdb_jsonrpc_session *s;
+
+    s = xzalloc(sizeof *s);
+    ovsdb_session_init(&s->up, &server->up);
+    s->remote = remote;
+    hmap_init(&s->triggers);
+    hmap_init(&s->monitors);
+    s->js = js;
+    s->js_seqno = jsonrpc_session_get_seqno(js);
+    atomic_count_inc(&server->n_sessions);
+
+    return s;
+}
+
+static struct ovsdb_jsonrpc_session *
 ovsdb_jsonrpc_session_create(struct ovsdb_jsonrpc_remote *remote,
                              struct jsonrpc_session *js)
 {
     struct ovsdb_jsonrpc_session *s;
     struct ovsdb_jsonrpc_server *server = remote->server;
 
-    s = xzalloc(sizeof *s);
-    ovsdb_session_init(&s->up, &server->up);
-    s->remote = remote;
+    s = ovsdb_jsonrpc_session_create__(remote, server, js);
     list_push_back(&server->all_sessions, &s->node);
-    hmap_init(&s->triggers);
-    hmap_init(&s->monitors);
-    s->js = js;
-    s->js_seqno = jsonrpc_session_get_seqno(js);
-
-    atomic_count_inc(&server->n_sessions);
 
     return s;
 }
+
+static struct ovsdb_jsonrpc_session *
+ovsdb_jsonrpc_thread_session_create(struct sessions_thread *thread,
+                                    void *remote,
+                                    struct ovsdb_jsonrpc_server *server,
+                                    struct jsonrpc_session *js)
+{
+    struct ovsdb_jsonrpc_session *s;
+
+    s = ovsdb_jsonrpc_session_create__(remote, server, js);
+    list_push_back(&thread->all_sessions, &s->node);
+
+    return s;
+}
+
 
 static void
 ovsdb_jsonrpc_session_close(struct ovsdb_jsonrpc_session *s)
@@ -1636,7 +1670,9 @@ sessions_thread_init(struct sessions_thread *thread)
     thread->thread = ovs_thread_create("sessions_thread",
                               sessions_thread_main, thread);
 
+    list_init(&thread->all_sessions);
     latch_init(&thread->exit_latch);
+
     ovs_mutex_init(&thread->cmd_queue_mutex);
 
     ovs_mutex_lock(&thread->cmd_queue_mutex);
@@ -1672,10 +1708,14 @@ sessions_thread_command_run(struct sessions_thread *thread)
              msg = CONTAINER_OF(node, struct ipc_msg, list);
              switch (msg->msg_type) {
              case IPC_ADD_SESSION_COMMAND:
+                 sessions_thread_add_new_session(thread, msg);
+                 break;
              case IPC_DELETE_SESSIONS_COMMAND:
+                 sessions_thread_delete_sessions(thread, msg);
+                 break;
              case IPC_RECONNECT_SESSIONS_COMMAND:
-                  VLOG_INFO("thread receive msg %s",
-                            ipc_msg_to_str(msg->msg_type));
+                 sessions_thread_reconnect_sessions(thread, msg);
+                 break;
              default:
                   VLOG_ERR("thread receive unkown msg");
              }
@@ -1684,6 +1724,38 @@ sessions_thread_command_run(struct sessions_thread *thread)
         ovs_mutex_unlock(&thread->cmd_queue_mutex);
         thread->last_cmd_seq = new_cmd_seq;
     }
+}
+
+static void
+sessions_thread_add_new_session(struct sessions_thread *thread,
+                                struct ipc_msg *msg)
+{
+    struct jsonrpc_session *js;
+    struct ipc_msg_add_session_command *m =
+        (struct ipc_msg_add_session_command *)msg;
+
+    js = jsonrpc_session_open_unreliably(jsonrpc_open(m->stream), m->dscp);
+    ovsdb_jsonrpc_thread_session_create(thread, m->remote, m->server, js);
+}
+
+static void
+sessions_thread_delete_sessions(struct sessions_thread *thread,
+                                struct ipc_msg *msg)
+{
+    struct ipc_msg_delete_sessions_command *m =
+        (struct ipc_msg_delete_sessions_command *)msg;
+
+    ovsdb_jsonrpc_sessions_close(&thread->all_sessions, m->remote);
+}
+
+static void
+sessions_thread_reconnect_sessions(struct sessions_thread *thread,
+                                   struct ipc_msg *msg)
+{
+    struct ipc_msg_reconnect_sessions_command *m =
+        (struct ipc_msg_reconnect_sessions_command *)msg;
+
+    ovsdb_jsonrpc_sessions_reconnect(&thread->all_sessions, m->remote);
 }
 
 static void
@@ -1710,6 +1782,7 @@ ipc_msg_clone(struct ipc_msg *msg)
     return clone;
 }
 
+#if 0
 static char *
 ipc_msg_to_str(enum ipc_msg_type msg_type)
 {
@@ -1722,9 +1795,12 @@ ipc_msg_to_str(enum ipc_msg_type msg_type)
 
     #undef IPC_MSG
 }
+#endif
 
 static struct ipc_msg *
-ipc_create_add_session_command(const struct stream* stream, const void *remote)
+ipc_create_add_session_command(struct stream* stream,
+                               struct ovsdb_jsonrpc_server *server,
+                               void *remote, uint8_t dscp)
 {
     struct ipc_msg_add_session_command *msg;
     size_t size = sizeof *msg;
@@ -1733,7 +1809,9 @@ ipc_create_add_session_command(const struct stream* stream, const void *remote)
     ipc_msg_init(&msg->up, size, IPC_ADD_SESSION_COMMAND);
 
     msg->stream = stream;
+    msg->server = server;
     msg->remote = remote;
+    msg->dscp = dscp;
 
     return &msg->up;
 }
