@@ -43,6 +43,7 @@
 #include "timeval.h"
 #include "transaction.h"
 #include "trigger.h"
+#include "util.h"
 
 VLOG_DEFINE_THIS_MODULE(ovsdb_jsonrpc_server);
 
@@ -1256,3 +1257,12 @@ static struct ovsdb_ipc_ops ipc_ops[OVSDB_IPC_N_MESSAGES] = {
     OVSDB_IPC_MESSAGES
 #undef OVSDB_IPC_MESSAGE
 };
+
+void
+ovsdb_jsonrpc_server_get_threads_info(struct ds *ds,
+                                      struct ovsdb_jsonrpc_server *svr)
+{
+     ds_put_format(ds, "Number of sessions handlers: %"PRIu32",", svr->n_handlers);
+     ds_put_format(ds, "Number of sessions: %"PRIu32"",
+                   atomic_count_get((struct atomic_count *)&svr->n_sessions));
+}
