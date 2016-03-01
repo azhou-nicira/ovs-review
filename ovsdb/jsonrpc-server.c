@@ -178,20 +178,23 @@ struct ipc_msg_add_session_command {
 struct ipc_msg_delete_sessions_command {
     struct ipc_msg up;
     const void *remote;
+    struct ovs_barrier *barrier;
 };
 
 struct ipc_msg_reconnect_sessions_command {
     struct ipc_msg up;
     const void *remote;
+    struct ovs_barrier *barrier;
 };
 
 // static char *ipc_msg_to_str(enum ipc_msg_type msg_type);
 static struct ipc_msg *ipc_create_add_session_command(
     struct stream* stream, struct ovsdb_jsonrpc_server *, void *remote,
     uint8_t dscp);
-static struct ipc_msg *ipc_create_delete_sessions_command(const void *remote);
+static struct ipc_msg *ipc_create_delete_sessions_command(const void *remote,
+                                    struct ovs_barrier *barrier);
 static struct ipc_msg *ipc_create_reconnect_sessions_command(
-    const void *remote);
+    const void *remote, struct ovs_barrier *barrier);
 static void send_ipc_msg(struct sessions_thread *, struct ipc_msg *);
 static void broadcast_ipc_msg(struct ovsdb_jsonrpc_server *svr,
                               struct ipc_msg *msg);
@@ -472,9 +475,18 @@ ovsdb_jsonrpc_server_reconnect(struct ovsdb_jsonrpc_server *svr)
 
     SHASH_FOR_EACH (node, &svr->remotes) {
         struct ovsdb_jsonrpc_remote *remote = node->data;
-        struct ipc_msg *msg = ipc_create_reconnect_sessions_command(remote);
 
-        broadcast_ipc_msg(svr, msg);
+        if (svr->n_active_threads) {
+            struct ovs_barrier barrier;
+            struct ipc_msg *msg;
+
+            ovs_barrier_init(&barrier, svr->n_active_threads);
+            msg = ipc_create_reconnect_sessions_command(remote, &barrier);
+            broadcast_ipc_msg(svr, msg);
+            ovs_barrier_block(&barrier);
+            ovs_barrier_destroy(&barrier);
+        }
+
         ovsdb_jsonrpc_sessions_reconnect(&svr->all_sessions, remote);
     }
 }
@@ -579,11 +591,17 @@ static void
 ovsdb_jsonrpc_server_close_sessions(struct ovsdb_jsonrpc_server *svr,
                                     const void *remote)
 {
-    struct ipc_msg *msg;
+    if (svr->n_active_threads) {
+        struct ipc_msg *msg;
+        struct ovs_barrier barrier;
 
-    /* Close all sesions in threads.  */
-    msg = ipc_create_delete_sessions_command(remote);
-    broadcast_ipc_msg(svr, msg);
+        /* Close sessions in all threads.  */
+        ovs_barrier_init(&barrier, svr->n_active_threads);
+        msg = ipc_create_delete_sessions_command(remote, &barrier);
+        broadcast_ipc_msg(svr, msg);
+        ovs_barrier_block(&barrier);
+        ovs_barrier_destroy(&barrier);
+    }
 
     /* Close local sessions.  */
     ovsdb_jsonrpc_sessions_close(&svr->all_sessions, remote);
@@ -1746,6 +1764,7 @@ sessions_thread_delete_sessions(struct sessions_thread *thread,
         (struct ipc_msg_delete_sessions_command *)msg;
 
     ovsdb_jsonrpc_sessions_close(&thread->all_sessions, m->remote);
+    ovs_barrier_block(m->barrier);
 }
 
 static void
@@ -1817,7 +1836,8 @@ ipc_create_add_session_command(struct stream* stream,
 }
 
 static struct ipc_msg *
-ipc_create_delete_sessions_command(const void *remote)
+ipc_create_delete_sessions_command(const void *remote,
+                                   struct ovs_barrier *barrier)
 {
     struct ipc_msg_delete_sessions_command *msg;
     size_t size = sizeof *msg;
@@ -1825,12 +1845,14 @@ ipc_create_delete_sessions_command(const void *remote)
     msg = xmalloc(size);
     ipc_msg_init(&msg->up, size, IPC_DELETE_SESSIONS_COMMAND);
     msg->remote = remote;
+    msg->barrier = barrier;
 
     return &msg->up;
 }
 
 static struct ipc_msg *
-ipc_create_reconnect_sessions_command(const void *remote)
+ipc_create_reconnect_sessions_command(const void *remote,
+                                      struct ovs_barrier *barrier)
 {
     struct ipc_msg_reconnect_sessions_command *msg;
     size_t size = sizeof *msg;
@@ -1838,6 +1860,7 @@ ipc_create_reconnect_sessions_command(const void *remote)
     msg = xmalloc(size);
     ipc_msg_init(&msg->up, size, IPC_RECONNECT_SESSIONS_COMMAND);
     msg->remote = remote;
+    msg->barrier = barrier;
 
     return &msg->up;
 }
