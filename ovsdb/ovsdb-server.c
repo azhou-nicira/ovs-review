@@ -97,6 +97,8 @@ static unixctl_cb_func ovsdb_server_add_database;
 static unixctl_cb_func ovsdb_server_remove_database;
 static unixctl_cb_func ovsdb_server_list_databases;
 
+static unixctl_cb_func ovsdb_server_list_threads;
+
 static char *open_db(struct server_config *config, const char *filename);
 static void close_db(struct db *db);
 
@@ -317,6 +319,8 @@ main(int argc, char *argv[])
                              ovsdb_server_compact, &all_dbs);
     unixctl_command_register("ovsdb-server/reconnect", "", 0, 0,
                              ovsdb_server_reconnect, jsonrpc);
+    unixctl_command_register("ovsdb-server/list-threads", "", 0, 0,
+                             ovsdb_server_list_threads, jsonrpc);
 
     unixctl_command_register("ovsdb-server/add-remote", "REMOTE", 1, 1,
                              ovsdb_server_add_remote, &server_config);
@@ -1267,6 +1271,20 @@ ovsdb_server_list_databases(struct unixctl_conn *conn, int argc OVS_UNUSED,
     }
     free(nodes);
 
+    unixctl_command_reply(conn, ds_cstr(&s));
+    ds_destroy(&s);
+}
+
+static void
+ovsdb_server_list_threads(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                          const char *argv[] OVS_UNUSED, void *jsonrpc_)
+{
+    struct ovsdb_jsonrpc_server *jsonrpc = jsonrpc_;
+    struct ds s;
+
+    ds_init(&s);
+
+    ovsdb_jsonrpc_server_get_threads_info(&s, jsonrpc);
     unixctl_command_reply(conn, ds_cstr(&s));
     ds_destroy(&s);
 }

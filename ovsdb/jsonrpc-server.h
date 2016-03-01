@@ -31,6 +31,7 @@ struct stream;
 struct ovs_list;
 struct ovsdb_jsonrpc_remote;
 struct sessions_handler;
+struct ds;
 
 DECLARE_EXTERN_PER_THREAD_DATA(struct sessions_handler *, per_thread_handler);
 
@@ -140,6 +141,8 @@ void ovsdb_jsonrpc_server_add_session(struct ovsdb_jsonrpc_server *,
                                       struct stream *,
                                       struct ovsdb_jsonrpc_remote *,
                                       uint8_t dscp);
+void ovsdb_jsonrpc_server_get_threads_info(struct ds *ds,
+                                           struct ovsdb_jsonrpc_server *);
 
 /* IPC messages are used to communicate between the main thread and
  * jsonrpc sessions thread.
