@@ -40,6 +40,7 @@
 #include "timeval.h"
 #include "transaction.h"
 #include "trigger.h"
+#include "util.h"
 #include "openvswitch/vlog.h"
 
 VLOG_DEFINE_THIS_MODULE(ovsdb_jsonrpc_server);
@@ -484,6 +485,14 @@ ovsdb_jsonrpc_server_destroy(struct ovsdb_jsonrpc_server *svr)
     shash_destroy(&svr->remotes);
     ovsdb_server_destroy(&svr->up);
     free(svr);
+}
+
+void
+ovsdb_jsonrpc_server_get_threads_info(struct ds *ds,
+                                      struct ovsdb_jsonrpc_server *svr)
+{
+     ds_put_format(ds, "Max number of threads: %"PRIuSIZE",", svr->n_max_threads);
+     ds_put_format(ds, "Threads in use:  %"PRIuSIZE, svr->n_active_threads);
 }
 
 size_t

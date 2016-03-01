@@ -25,6 +25,7 @@ struct simap;
 struct ovs_list;
 struct ovsdb_jsonrpc_remote;
 struct jsonrpc_session;
+struct ds;
 
 struct ovsdb_jsonrpc_server *ovsdb_jsonrpc_server_create(size_t n_max_threads);
 bool ovsdb_jsonrpc_server_add_db(struct ovsdb_jsonrpc_server *,
@@ -81,6 +82,9 @@ struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_server_first_session(
 
 void ovsdb_jsonrpc_server_get_memory_usage(const struct ovsdb_jsonrpc_server *,
                                            struct simap *usage);
+
+void ovsdb_jsonrpc_server_get_threads_info(struct ds *ds,
+                                           struct ovsdb_jsonrpc_server *);
 
 struct ovsdb_jsonrpc_monitor;
 void ovsdb_jsonrpc_monitor_destroy(struct ovsdb_jsonrpc_monitor *);
