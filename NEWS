@@ -36,6 +36,10 @@ Post-v2.5.0
        for 2.7+.
    - SELinux:
      * Introduced SELinux policy package.
+   - ovsdb-server:
+     * Support multi-threading. '--max-num-threads' command line
+      option are added to specify the max thread to use. Either passing
+      in '0' or omit the option disables multi-threading
 
 v2.5.0 - xx xxx xxxx
 ---------------------

@@ -87,6 +87,7 @@ struct server_config {
     struct shash *all_dbs;
     FILE *config_tmpfile;
     struct ovsdb_jsonrpc_server *jsonrpc;
+    size_t n_max_threads;
 };
 static unixctl_cb_func ovsdb_server_add_remote;
 static unixctl_cb_func ovsdb_server_remove_remote;
@@ -101,7 +102,7 @@ static void close_db(struct db *db);
 
 static void parse_options(int *argc, char **argvp[],
                           struct sset *remotes, char **unixctl_pathp,
-                          char **run_command);
+                          char **run_command, size_t *n_max_threads);
 OVS_NO_RETURN static void usage(void);
 
 static char *reconfigure_remotes(struct ovsdb_jsonrpc_server *,
@@ -115,10 +116,11 @@ static void update_remote_status(const struct ovsdb_jsonrpc_server *jsonrpc,
                                  struct shash *all_dbs);
 
 static void save_config__(FILE *config_file, const struct sset *remotes,
-                          const struct sset *db_filenames);
+                          const struct sset *db_filenames,
+                          size_t n_max_threads);
 static void save_config(struct server_config *);
 static void load_config(FILE *config_file, struct sset *remotes,
-                        struct sset *db_filenames);
+                        struct sset *db_filenames, size_t *n_max_threads);
 
 static void
 main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
@@ -214,6 +216,7 @@ main(int argc, char *argv[])
     struct server_config server_config;
     struct shash all_dbs;
     struct shash_node *node, *next;
+    size_t n_max_threads;
     char *error;
     int i;
 
@@ -223,7 +226,8 @@ main(int argc, char *argv[])
     fatal_ignore_sigpipe();
     process_init();
 
-    parse_options(&argc, &argv, &remotes, &unixctl_path, &run_command);
+    parse_options(&argc, &argv, &remotes, &unixctl_path, &run_command,
+                  &n_max_threads);
     daemon_become_new_user(false);
 
     /* Create and initialize 'config_tmpfile' as a temporary file to hold
@@ -249,14 +253,15 @@ main(int argc, char *argv[])
 
     server_config.remotes = &remotes;
     server_config.config_tmpfile = config_tmpfile;
+    server_config.n_max_threads = n_max_threads;
 
-    save_config__(config_tmpfile, &remotes, &db_filenames);
+    save_config__(config_tmpfile, &remotes, &db_filenames, n_max_threads);
 
     daemonize_start(false);
 
     /* Load the saved config. */
-    load_config(config_tmpfile, &remotes, &db_filenames);
-    jsonrpc = ovsdb_jsonrpc_server_create(0);
+    load_config(config_tmpfile, &remotes, &db_filenames, &n_max_threads);
+    jsonrpc = ovsdb_jsonrpc_server_create(n_max_threads);
 
     shash_init(&all_dbs);
     server_config.all_dbs = &all_dbs;
@@ -1270,7 +1275,8 @@ ovsdb_server_list_databases(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
 static void
 parse_options(int *argcp, char **argvp[],
-              struct sset *remotes, char **unixctl_pathp, char **run_command)
+              struct sset *remotes, char **unixctl_pathp, char **run_command,
+              size_t *n_max_threads)
 {
     enum {
         OPT_REMOTE = UCHAR_MAX + 1,
@@ -1278,12 +1284,14 @@ parse_options(int *argcp, char **argvp[],
         OPT_RUN,
         OPT_BOOTSTRAP_CA_CERT,
         OPT_PEER_CA_CERT,
+        OPT_THREAD,
         VLOG_OPTION_ENUMS,
         DAEMON_OPTION_ENUMS
     };
     static const struct option long_options[] = {
         {"remote",      required_argument, NULL, OPT_REMOTE},
         {"unixctl",     required_argument, NULL, OPT_UNIXCTL},
+        {"max-num-threads", required_argument, NULL, OPT_THREAD},
 #ifndef _WIN32
         {"run",         required_argument, NULL, OPT_RUN},
 #endif
@@ -1301,6 +1309,7 @@ parse_options(int *argcp, char **argvp[],
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
     int argc = *argcp;
     char **argv = *argvp;
+    *n_max_threads = 0;
 
     sset_init(remotes);
     for (;;) {
@@ -1322,6 +1331,10 @@ parse_options(int *argcp, char **argvp[],
 
         case OPT_RUN:
             *run_command = optarg;
+            break;
+
+        case OPT_THREAD:
+            *n_max_threads = atoi(optarg);
             break;
 
         case 'h':
@@ -1385,6 +1398,7 @@ usage(void)
     printf("\nOther options:\n"
            "  --run COMMAND           run COMMAND as subprocess then exit\n"
            "  --unixctl=SOCKET        override default control socket name\n"
+           "  --max-num-threads=NUM   spawn up to 'NUM' threads\n"
            "  -h, --help              display this help message\n"
            "  -V, --version           display version information\n");
     exit(EXIT_SUCCESS);
@@ -1407,7 +1421,7 @@ sset_to_json(const struct sset *sset)
  * 'remotes' and 'db_filenames'. */
 static void
 save_config__(FILE *config_file, const struct sset *remotes,
-              const struct sset *db_filenames)
+              const struct sset *db_filenames, size_t n_max_threads)
 {
     struct json *obj;
     char *s;
@@ -1420,6 +1434,10 @@ save_config__(FILE *config_file, const struct sset *remotes,
     obj = json_object_create();
     json_object_put(obj, "remotes", sset_to_json(remotes));
     json_object_put(obj, "db_filenames", sset_to_json(db_filenames));
+    if (n_max_threads) {
+        json_object_put(obj, "n_max_threads",
+                        json_integer_create(n_max_threads));
+    }
     s = json_to_string(obj, 0);
     json_destroy(obj);
 
@@ -1445,7 +1463,8 @@ save_config(struct server_config *config)
         sset_add(&db_filenames, db->filename);
     }
 
-    save_config__(config->config_tmpfile, config->remotes, &db_filenames);
+    save_config__(config->config_tmpfile, config->remotes, &db_filenames,
+                  config->n_max_threads);
 
     sset_destroy(&db_filenames);
 }
@@ -1464,10 +1483,22 @@ sset_from_json(struct sset *sset, const struct json *array)
     }
 }
 
+static void
+n_max_threads_from_json(size_t *n_max_threads, const struct json * json)
+{ 
+    if (json && json->type == JSON_INTEGER) {
+        *n_max_threads = json->u.integer;
+    } else {
+        *n_max_threads = 0;
+    }
+}
+
+
 /* Clears and replaces 'remotes' and 'dbnames' by a configuration read from
  * 'config_file', which must have been previously written by save_config(). */
 static void
-load_config(FILE *config_file, struct sset *remotes, struct sset *db_filenames)
+load_config(FILE *config_file, struct sset *remotes, struct sset *db_filenames,
+            size_t *n_max_threads)
 {
     struct json *json;
 
@@ -1483,5 +1514,7 @@ load_config(FILE *config_file, struct sset *remotes, struct sset *db_filenames)
     sset_from_json(remotes, shash_find_data(json_object(json), "remotes"));
     sset_from_json(db_filenames,
                    shash_find_data(json_object(json), "db_filenames"));
+    n_max_threads_from_json(n_max_threads, shash_find_data(json_object(json),
+                                                           "n_max_threads"));
     json_destroy(json);
 }
