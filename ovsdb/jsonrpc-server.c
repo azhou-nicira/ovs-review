@@ -51,6 +51,9 @@ struct ovsdb_jsonrpc_session;
  * method with an error.  */
 static bool monitor2_enable__ = true;
 
+/* A global lock to serilize just about all OVSDB operations. */
+static struct ovs_mutex mutex = OVS_MUTEX_INITIALIZER;
+
 /* Message rate-limiting. */
 static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 5);
 
@@ -92,7 +95,7 @@ static struct ovsdb_jsonrpc_trigger *ovsdb_jsonrpc_trigger_find(
 static void ovsdb_jsonrpc_trigger_complete(struct ovsdb_jsonrpc_trigger *);
 static void ovsdb_jsonrpc_trigger_complete_all(struct ovsdb_jsonrpc_session *);
 static void ovsdb_jsonrpc_trigger_complete_done(
-    struct ovsdb_jsonrpc_session *);
+    struct ovsdb_jsonrpc_session *) OVS_EXCLUDED(mutex);
 
 /* Monitors. */
 static struct jsonrpc_msg *ovsdb_jsonrpc_monitor_create(
@@ -471,14 +474,16 @@ ovsdb_jsonrpc_server_use_threads(struct ovsdb_jsonrpc_server *svr) {
 
 struct ovsdb_jsonrpc_session {
     struct ovs_list node;       /* Element in remote's sessions list. */
-    struct ovsdb_session up;
+    struct ovsdb_session up  OVS_GUARDED_BY(mutex);
     const void *remote;
 
     /* Triggers. */
-    struct hmap triggers;       /* Hmap of "struct ovsdb_jsonrpc_trigger"s. */
+    /* Hmap of "struct ovsdb_jsonrpc_trigger"s. */
+    struct hmap triggers    OVS_GUARDED_BY(mutex);
 
     /* Monitors. */
-    struct hmap monitors;       /* Hmap of "struct ovsdb_jsonrpc_monitor"s. */
+    /* Hmap of "struct ovsdb_jsonrpc_monitor"s. */
+    struct hmap monitors   OVS_GUARDED_BY(mutex);
 
     /* Network connectivity. */
     struct jsonrpc_session *js;  /* JSON-RPC session. */
@@ -486,7 +491,8 @@ struct ovsdb_jsonrpc_session {
 };
 
 static void ovsdb_jsonrpc_session_close(struct ovsdb_jsonrpc_session *);
-static int ovsdb_jsonrpc_session_run(struct ovsdb_jsonrpc_session *);
+static int ovsdb_jsonrpc_session_run(struct ovsdb_jsonrpc_session *)
+    OVS_EXCLUDED(mutex);
 static void ovsdb_jsonrpc_session_wait(struct ovsdb_jsonrpc_session *);
 static void ovsdb_jsonrpc_session_get_memory_usage(
     const struct ovsdb_jsonrpc_session *, struct simap *usage);
@@ -521,6 +527,8 @@ ovsdb_jsonrpc_session_close(struct ovsdb_jsonrpc_session *s)
 {
     struct ovsdb_jsonrpc_server *server;
 
+    ovs_mutex_lock(&mutex);
+
     ovsdb_jsonrpc_monitor_remove_all(s);
     ovsdb_jsonrpc_session_unlock_all(s);
     ovsdb_jsonrpc_trigger_complete_all(s);
@@ -533,11 +541,14 @@ ovsdb_jsonrpc_session_close(struct ovsdb_jsonrpc_session *s)
     server = ovsdb_jsonrpc_server_cast(s->up.server);
     atomic_count_dec(&server->n_sessions);
     ovsdb_session_destroy(&s->up);
+
+    ovs_mutex_unlock(&mutex);
     free(s);
 }
 
 static int
 ovsdb_jsonrpc_session_run(struct ovsdb_jsonrpc_session *s)
+    OVS_EXCLUDED(mutex)
 {
     jsonrpc_session_run(s->js);
     if (s->js_seqno != jsonrpc_session_get_seqno(s->js)) {
@@ -549,6 +560,7 @@ ovsdb_jsonrpc_session_run(struct ovsdb_jsonrpc_session *s)
 
     ovsdb_jsonrpc_trigger_complete_done(s);
 
+    ovs_mutex_lock(&mutex);
     if (!jsonrpc_session_get_backlog(s->js)) {
         struct jsonrpc_msg *msg;
 
@@ -569,6 +581,7 @@ ovsdb_jsonrpc_session_run(struct ovsdb_jsonrpc_session *s)
             }
         }
     }
+    ovs_mutex_unlock(&mutex);
     return jsonrpc_session_is_alive(s->js) ? 0 : ETIMEDOUT;
 }
 
@@ -586,11 +599,13 @@ ovsdb_jsonrpc_session_wait(struct ovsdb_jsonrpc_session *s)
 {
     jsonrpc_session_wait(s->js);
     if (!jsonrpc_session_get_backlog(s->js)) {
+        ovs_mutex_lock(&mutex);
         if (ovsdb_jsonrpc_monitor_needs_flush(s)) {
             poll_immediate_wake();
         } else {
             jsonrpc_session_recv_wait(s->js);
         }
+        ovs_mutex_unlock(&mutex);
     }
 }
 
@@ -686,6 +701,7 @@ static struct ovsdb *
 ovsdb_jsonrpc_lookup_db(const struct ovsdb_jsonrpc_session *s,
                         const struct jsonrpc_msg *request,
                         struct jsonrpc_msg **replyp)
+     OVS_REQUIRES(mutex)
 {
     struct json_array *params;
     struct ovsdb_error *error;
@@ -755,6 +771,7 @@ static struct jsonrpc_msg *
 ovsdb_jsonrpc_session_lock(struct ovsdb_jsonrpc_session *s,
                            struct jsonrpc_msg *request,
                            enum ovsdb_lock_mode mode)
+    OVS_REQUIRES(mutex)
 {
     struct ovsdb_lock_waiter *waiter;
     struct jsonrpc_msg *reply;
@@ -870,6 +887,7 @@ execute_transaction(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
 static void
 ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *s,
                                   struct jsonrpc_msg *request)
+    OVS_REQUIRES(mutex)
 {
     struct jsonrpc_msg *reply;
 
@@ -1059,13 +1077,16 @@ ovsdb_jsonrpc_trigger_complete_all(struct ovsdb_jsonrpc_session *s)
 
 static void
 ovsdb_jsonrpc_trigger_complete_done(struct ovsdb_jsonrpc_session *s)
+    OVS_EXCLUDED(mutex)
 {
+    ovs_mutex_lock(&mutex);
     while (!list_is_empty(&s->up.completions)) {
         struct ovsdb_jsonrpc_trigger *t
             = CONTAINER_OF(s->up.completions.next,
                            struct ovsdb_jsonrpc_trigger, trigger.node);
         ovsdb_jsonrpc_trigger_complete(t);
     }
+    ovs_mutex_unlock(&mutex);
 }
 
 /* Jsonrpc front end monitor. */
