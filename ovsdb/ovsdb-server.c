@@ -102,7 +102,7 @@ static void close_db(struct db *db);
 
 static void parse_options(int *argc, char **argvp[],
                           struct sset *remotes, char **unixctl_pathp,
-                          char **run_command);
+                          char **run_command, size_t *n_max_threads);
 OVS_NO_RETURN static void usage(void);
 
 static char *reconfigure_remotes(struct ovsdb_jsonrpc_server *,
@@ -215,6 +215,7 @@ main(int argc, char *argv[])
     struct server_config server_config;
     struct shash all_dbs;
     struct shash_node *node, *next;
+    size_t n_max_threads;
     char *error;
     int i;
 
@@ -224,7 +225,8 @@ main(int argc, char *argv[])
     fatal_ignore_sigpipe();
     process_init();
 
-    parse_options(&argc, &argv, &remotes, &unixctl_path, &run_command);
+    parse_options(&argc, &argv, &remotes, &unixctl_path, &run_command,
+                  &n_max_threads);
     daemon_become_new_user(false);
 
     /* Create and initialize 'config_tmpfile' as a temporary file to hold
@@ -257,7 +259,7 @@ main(int argc, char *argv[])
 
     /* Load the saved config. */
     load_config(config_tmpfile, &remotes, &db_filenames);
-    jsonrpc = ovsdb_jsonrpc_server_create(0);
+    jsonrpc = ovsdb_jsonrpc_server_create(n_max_threads);
 
     shash_init(&all_dbs);
     server_config.all_dbs = &all_dbs;
@@ -1271,7 +1273,8 @@ ovsdb_server_list_databases(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
 static void
 parse_options(int *argcp, char **argvp[],
-              struct sset *remotes, char **unixctl_pathp, char **run_command)
+              struct sset *remotes, char **unixctl_pathp, char **run_command,
+              size_t *n_max_threads)
 {
     enum {
         OPT_REMOTE = UCHAR_MAX + 1,
@@ -1279,12 +1282,14 @@ parse_options(int *argcp, char **argvp[],
         OPT_RUN,
         OPT_BOOTSTRAP_CA_CERT,
         OPT_PEER_CA_CERT,
+        OPT_THREAD,
         VLOG_OPTION_ENUMS,
         DAEMON_OPTION_ENUMS
     };
     static const struct option long_options[] = {
         {"remote",      required_argument, NULL, OPT_REMOTE},
         {"unixctl",     required_argument, NULL, OPT_UNIXCTL},
+        {"max-threads", required_argument, NULL, OPT_THREAD},
 #ifndef _WIN32
         {"run",         required_argument, NULL, OPT_RUN},
 #endif
@@ -1302,6 +1307,7 @@ parse_options(int *argcp, char **argvp[],
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
     int argc = *argcp;
     char **argv = *argvp;
+    *n_max_threads = 0;
 
     sset_init(remotes);
     for (;;) {
@@ -1323,6 +1329,10 @@ parse_options(int *argcp, char **argvp[],
 
         case OPT_RUN:
             *run_command = optarg;
+            break;
+
+        case OPT_THREAD:
+            *n_max_threads = atoi(optarg);
             break;
 
         case 'h':
@@ -1386,6 +1396,7 @@ usage(void)
     printf("\nOther options:\n"
            "  --run COMMAND           run COMMAND as subprocess then exit\n"
            "  --unixctl=SOCKET        override default control socket name\n"
+           "  --max-num-threads=NUM   spawn up to 'NUM' threads\n"
            "  -h, --help              display this help message\n"
            "  -V, --version           display version information\n");
     exit(EXIT_SUCCESS);
