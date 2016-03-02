@@ -16,6 +16,7 @@ ovsdb\-server \- Open vSwitch database server
 [\fIdatabase\fR]\&...
 [\fB\-\-remote=\fIremote\fR]\&...
 [\fB\-\-run=\fIcommand\fR]
+[\fB\-\-max-threads=\fInumber\fR]
 .so lib/daemon-syn.man
 .so lib/service-syn.man
 .so lib/vlog-syn.man
@@ -91,6 +92,12 @@ run a single command, e.g.:
 .B "ovsdb\-server \-\-remote=punix:socket \-\-run='ovsdb\-client dump unix:socket Open_vSwitch'"
 .IP
 This option is not supported on Windows platform.
+.
+.IP "\fB\-\-max-threads=\fInumber\fR"
+Ordinarily \fBovsdb\-server\fR runs without spawning additional threads.
+Use this option to increase \fBovsdb\-server\fR throughput on a multi-core
+server by spawning up to \fInumber\fR of additional threads to handle
+incoming client connections.
 .SS "Daemon Options"
 .ds DD \
 \fBovsdb\-server\fR detaches only after it starts listening on all \
