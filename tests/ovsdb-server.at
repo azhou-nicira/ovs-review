@@ -963,3 +963,45 @@ m4_define([OVSDB_CHECK_EXECUTION],
    AT_CLEANUP])
 
 EXECUTION_EXAMPLES
+
+AT_BANNER([OVSDB -- ovsdb-server trasaction (multi-threading)])
+
+# OVSDB_CHECK_EXECUTION(TITLE, SCHEMA, TRANSACTIONS, OUTPUT, [KEYWORDS])
+#
+# Creates a database with the given SCHEMA, starts an ovsdb-server with
+# multi-threading on that database, and runs each of the TRANSACTIONS
+# (which should be a quoted list of quoted strings) against it with
+# ovsdb-client one at a time. Those transaction will be handled by
+# the new thread.
+#
+# Checks that the overall output is OUTPUT, but UUIDs in the output
+# are replaced by markers of the form <N> where N is a number.  The
+# first unique UUID is replaced by <0>, the next by <1>, and so on.
+# If a given UUID appears more than once it is always replaced by the
+# same marker.
+#
+# TITLE is provided to AT_SETUP and KEYWORDS to AT_KEYWORDS.
+m4_define([OVSDB_CHECK_EXECUTION],
+  [AT_SETUP([$1])
+   AT_KEYWORDS([ovsdb server mt positive $5])
+   $2 > schema
+   AT_CHECK([ovsdb-tool create db schema], [0], [stdout], [ignore])
+   AT_CHECK([ovsdb-server --log-file --detach --no-chdir --pidfile="`pwd`"/pid --remote=punix:socket --unixctl="`pwd`"/unixctl --max-num-threads=4 db], [0], [ignore], [ignore])
+   AT_CHECK([ovsdb-client --detach --no-chdir monitor unix:socket ALL > /dev/null ], [0], [ignore], [ignore])
+   AT_CHECK([ovsdb-client --detach --no-chdir monitor unix:socket ALL > /dev/null ], [0], [ignore], [ignore])
+   AT_CHECK([ovsdb-client --detach --no-chdir monitor unix:socket ALL > /dev/null ], [0], [ignore], [ignore])
+   # Verify ovsdb-server has started one session threads
+   AT_CHECK([ovs-appctl -t "`pwd`"/unixctl ovsdb-server/list-threads], [0], [Max number of threads: 4,Threads in use:  1
+], [ignore])
+   # Execute transactions in threads
+   m4_foreach([txn], [$3],
+     [AT_CHECK([ovsdb-client transact unix:socket 'txn'], [0], [stdout], [ignore],
+     [test ! -e pid || kill `cat pid`])
+cat stdout >> output
+])
+   AT_CHECK([${PERL} $srcdir/uuidfilt.pl output], [0], [$4], [ignore],
+            [test ! -e pid || kill `cat pid`])
+   OVSDB_SERVER_SHUTDOWN
+   AT_CLEANUP])
+
+ONE_EXECUTION_EXAMPLE
