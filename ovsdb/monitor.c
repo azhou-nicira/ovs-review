@@ -1166,8 +1166,20 @@ ovsdb_monitor_get_memory_usage(struct simap *usage)
     struct ovsdb_monitor *dbmon;
     simap_put(usage, "monitors", hmap_count(&ovsdb_monitors));
 
-    HMAP_FOR_EACH(dbmon, hmap_node,  &ovsdb_monitors) {
+    HMAP_FOR_EACH (dbmon, hmap_node, &ovsdb_monitors) {
+        struct shash_node *node;
         simap_increase(usage, "json_caches", hmap_count(&dbmon->json_cache));
+        simap_increase(usage, "mon_tables", shash_count(&dbmon->tables));
+
+        SHASH_FOR_EACH (node, &dbmon->tables) {
+            struct ovsdb_monitor_table *mt = node->data;
+            struct ovsdb_monitor_changes *changes;
+            simap_increase(usage, "mon_changes", hmap_count(&mt->changes));
+
+            HMAP_FOR_EACH (changes, hmap_node, &mt->changes) {
+                simap_increase(usage, "change_rows", hmap_count(&changes->rows));
+            }
+        }
     }
 }
 
