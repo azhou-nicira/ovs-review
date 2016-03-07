@@ -37,6 +37,7 @@
 #include "monitor.h"
 #include "openvswitch/vlog.h"
 
+VLOG_DEFINE_THIS_MODULE(monitor);
 
 static const struct ovsdb_replica_class ovsdb_jsonrpc_replica_class;
 static struct hmap ovsdb_monitors = HMAP_INITIALIZER(&ovsdb_monitors);
@@ -1177,8 +1178,46 @@ ovsdb_monitor_get_memory_usage(struct simap *usage)
             simap_increase(usage, "mon_changes", hmap_count(&mt->changes));
 
             HMAP_FOR_EACH (changes, hmap_node, &mt->changes) {
-                simap_increase(usage, "change_rows", hmap_count(&changes->rows));
+                simap_increase(usage, "change_rows",
+                               hmap_count(&changes->rows));
             }
+        }
+    }
+}
+
+void
+ovsdb_monitor_debug_memory_by_db(void)
+{
+    struct ovsdb_monitor *dbmon;
+    size_t n_changes, n_change_rows;
+
+    HMAP_FOR_EACH (dbmon, hmap_node, &ovsdb_monitors) {
+        struct shash_node *node;
+        n_changes = 0;
+        n_change_rows = 0;
+        VLOG_ERR("DB: %s", dbmon->db->schema->name);
+
+        SHASH_FOR_EACH (node, &dbmon->tables) {
+            struct ovsdb_monitor_table *mt = node->data;
+            struct ovsdb_monitor_changes *changes;
+            VLOG_ERR("table %s, changes: %"PRIuSIZE, mt->table->schema->name,
+                     hmap_count(&mt->changes));
+
+            n_changes += hmap_count(&mt->changes);
+
+            HMAP_FOR_EACH (changes, hmap_node, &mt->changes) {
+                VLOG_ERR("table %s, transaction: %"PRIu64",rows: %"PRIuSIZE,
+                         mt->table->schema->name, changes->transaction,
+                         hmap_count(&changes->rows));
+                n_change_rows += hmap_count(&changes->rows);
+            }
+        }
+
+        if (n_changes) {
+            VLOG_ERR ("total mon_changes: %"PRIuSIZE, n_changes);
+        }
+        if (n_change_rows) {
+            VLOG_ERR ("change_rows: %"PRIuSIZE, n_change_rows);
         }
     }
 }

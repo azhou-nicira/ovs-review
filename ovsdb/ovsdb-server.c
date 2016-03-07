@@ -81,6 +81,7 @@ static unixctl_cb_func ovsdb_server_reconnect;
 static unixctl_cb_func ovsdb_server_perf_counters_clear;
 static unixctl_cb_func ovsdb_server_perf_counters_show;
 static unixctl_cb_func ovsdb_server_disable_monitor2;
+static unixctl_cb_func ovsdb_server_memory_debug;
 
 struct server_config {
     struct sset *remotes;
@@ -337,6 +338,9 @@ main(int argc, char *argv[])
      * does not support the monitor2 method.  */
     unixctl_command_register("ovsdb-server/disable-monitor2", "", 0, 0,
                              ovsdb_server_disable_monitor2, jsonrpc);
+
+    unixctl_command_register("memory/debug", "", 0, 0,
+                             ovsdb_server_memory_debug, NULL);
 
     main_loop(jsonrpc, &all_dbs, unixctl, &remotes, run_process, &exiting);
 
@@ -1072,6 +1076,14 @@ ovsdb_server_disable_monitor2(struct unixctl_conn *conn, int argc OVS_UNUSED,
 
     ovsdb_jsonrpc_disable_monitor2();
     ovsdb_jsonrpc_server_reconnect(jsonrpc);
+    unixctl_command_reply(conn, NULL);
+}
+
+static void
+ovsdb_server_memory_debug(struct unixctl_conn *conn, int argc OVS_UNUSED,
+                           const char *argv[] OVS_UNUSED, void *arg OVS_UNUSED)
+{
+    ovsdb_monitor_debug_memory_by_db();
     unixctl_command_reply(conn, NULL);
 }
 
