@@ -1,0 +1,49 @@
+#include <stdio.h>
+#include <stdlib.h>
+
+static int *
+allocate_and_touch(size_t s)
+{
+   int *x = malloc(s);
+   size_t i;
+
+   if (x) {
+       for (i = 0; i < s / sizeof(int); i++) {
+           x[i] = 1000;
+       }
+   }
+
+   return x;
+}
+
+int
+main(int argc, char **argv)
+{
+    size_t M = 1024 * 1024 * sizeof(int);
+    int *a = allocate_and_touch(M );
+    int *b = allocate_and_touch(M);
+    int *c = allocate_and_touch(M);
+
+    if (!a || !b || !c) {
+        printf ("Failed to allocate a, b or c\n");
+        exit(-1);
+    }
+
+    printf("allocated %zu KB", 3 * M / 1024);
+    printf ("waiting for an input to quit \n");
+    getchar();
+
+    free(b);
+    printf("freed %zu KB, %zu KB remaining \n", M / 1024, 2 * M / 1024);
+    fflush(stdout);
+    printf ("waiting for an input to quit \n");
+    getchar();
+
+    free(a);
+    free(c);
+    printf("freed all \n");
+    printf ("waiting for an input to quit \n");
+    getchar();
+
+    return 0;
+}

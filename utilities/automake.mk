@@ -56,7 +56,8 @@ EXTRA_DIST += \
 	utilities/ovs-test.in \
 	utilities/ovs-vlan-test.in \
 	utilities/ovs-vsctl-bashcomp.bash \
-	utilities/qemu-wrap.py
+	utilities/qemu-wrap.py \
+	utilities/test-memory.c.note
 MAN_ROOTS += \
 	utilities/ovs-appctl.8.in \
 	utilities/ovs-testcontroller.8.in \
