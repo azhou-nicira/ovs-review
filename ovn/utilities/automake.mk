@@ -18,7 +18,11 @@ EXTRA_DIST += \
     ovn/utilities/ovn-ctl.8.xml \
     ovn/utilities/ovn-docker-overlay-driver \
     ovn/utilities/ovn-docker-underlay-driver \
-    ovn/utilities/ovn-nbctl.8.xml
+    ovn/utilities/ovn-nbctl.8.xml \
+    ovn/utilities/nb-add-lport.sh \
+    ovn/utilities/nb-add-lswitch.sh \
+    ovn/utilities/vm-status.sh \
+    ovn/utilities/debug-run.sh
 
 DISTCLEANFILES += \
     ovn/utilities/ovn-ctl.8 \
