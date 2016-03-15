@@ -69,12 +69,14 @@ struct ovs_frag_data {
 
 static DEFINE_PER_CPU(struct ovs_frag_data, ovs_frag_data_storage);
 
-#define DEFERRED_ACTION_FIFO_SIZE 10
+#define DEFERRED_ACTION_FIFO_INIT_SIZE 10
 struct action_fifo {
 	int head;
 	int tail;
 	/* Deferred action fifo queue storage. */
-	struct deferred_action fifo[DEFERRED_ACTION_FIFO_SIZE];
+	struct deferred_action *fifo;
+	size_t size;     /* Current size of the fifo in bytes */
+	struct deferred_action initial_fifo[DEFERRED_ACTION_FIFO_INIT_SIZE];
 };
 
 static struct action_fifo __percpu *action_fifos;
@@ -87,6 +89,16 @@ static void action_fifo_init(struct action_fifo *fifo)
 {
 	fifo->head = 0;
 	fifo->tail = 0;
+	fifo->fifo = fifo->initial_fifo;
+	fifo->size = sizeof(*fifo->fifo) * DEFERRED_ACTION_FIFO_INIT_SIZE;
+}
+
+static void action_fifo_clear(struct action_fifo *fifo)
+{
+	if (fifo->fifo != fifo->initial_fifo)
+		kfree(fifo->fifo);
+
+	action_fifo_init(fifo);
 }
 
 static bool action_fifo_is_empty(const struct action_fifo *fifo)
@@ -104,8 +116,22 @@ static struct deferred_action *action_fifo_get(struct action_fifo *fifo)
 
 static struct deferred_action *action_fifo_put(struct action_fifo *fifo)
 {
-	if (fifo->head >= DEFERRED_ACTION_FIFO_SIZE - 1)
-		return NULL;
+	if (fifo->head >= fifo->size - 1) {
+		/* out of fifo buffer space, try to allocate a new fifo
+		 * buffer. */
+		struct deferred_action *new_fifo;
+		int new_size = fifo->size * 2;
+
+		new_fifo = kmalloc(new_size, GFP_ATOMIC);
+		if (new_fifo) {
+			memcpy(new_fifo, fifo->fifo, fifo->size);
+			if (fifo->fifo != fifo->initial_fifo)
+				kfree(fifo->fifo);
+			fifo->fifo = new_fifo;
+			fifo->size = new_size;
+		} else
+			return NULL;
+	}
 
 	return &fifo->fifo[fifo->head++];
 }
@@ -1156,7 +1182,7 @@ static void process_deferred_actions(struct datapath *dp)
 	} while (!action_fifo_is_empty(fifo));
 
 	/* Reset FIFO for the next packet.  */
-	action_fifo_init(fifo);
+	action_fifo_clear(fifo);
 }
 
 /* Execute a list of actions against 'skb'. */
@@ -1194,10 +1220,19 @@ int ovs_execute_actions(struct datapath *dp, struct sk_buff *skb,
 
 int action_fifos_init(void)
 {
+	int i;
+
 	action_fifos = alloc_percpu(struct action_fifo);
 	if (!action_fifos)
 		return -ENOMEM;
 
+	/* Use pre allocated fifo. */
+	for_each_possible_cpu(i) {
+		struct action_fifo *action_fifo;
+
+		action_fifo = per_cpu_ptr(action_fifos, i);
+		action_fifo_init(action_fifo);
+	}
 	return 0;
 }
 
