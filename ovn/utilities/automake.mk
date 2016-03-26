@@ -34,5 +34,10 @@ ovn_utilities_ovn_nbctl_LDADD = ovn/lib/libovn.la ovsdb/libovsdb.la lib/libopenv
 bin_PROGRAMS += ovn/utilities/ovn-sbctl
 ovn_utilities_ovn_sbctl_SOURCES = ovn/utilities/ovn-sbctl.c
 ovn_utilities_ovn_sbctl_LDADD = ovn/lib/libovn.la ovsdb/libovsdb.la lib/libopenvswitch.la
+#
+# ovn-sb-benchmark
+bin_PROGRAMS += ovn/utilities/ovn-sb-benchmark
+ovn_utilities_ovn_sb_benchmark_SOURCES = ovn/utilities/ovn-sb-benchmark.c
+ovn_utilities_ovn_sb_benchmark_LDADD = ovn/lib/libovn.la ovsdb/libovsdb.la lib/libopenvswitch.la
 
 include ovn/utilities/bugtool/automake.mk
