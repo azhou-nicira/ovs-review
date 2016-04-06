@@ -16,6 +16,8 @@ ovsdb_libovsdb_la_SOURCES = \
 	ovsdb/jsonrpc-remote.h \
 	ovsdb/jsonrpc-server.c \
 	ovsdb/jsonrpc-server.h \
+	ovsdb/jsonrpc-sessions.c \
+	ovsdb/jsonrpc-sessions.h \
 	ovsdb/log.c \
 	ovsdb/log.h \
 	ovsdb/mutation.c \
