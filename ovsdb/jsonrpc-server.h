@@ -17,14 +17,24 @@
 #define OVSDB_JSONRPC_SERVER_H 1
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "openvswitch/types.h"
+#include "server.h"
 
 struct ovsdb;
 struct shash;
 struct simap;
+struct stream;
 struct ovs_list;
 struct ovsdb_jsonrpc_remote;
-struct jsonrpc_session;
+
+/* JSON-RPC database server. */
+struct ovsdb_jsonrpc_server {
+    struct ovsdb_server up;
+    unsigned int n_sessions;
+    struct shash remotes;      /* Contains "struct ovsdb_jsonrpc_remote *"s. */
+    struct ovs_list all_sessions;  /* List of 'ovsdb_jsonrpc_session's.   */
+};
 
 struct ovsdb_jsonrpc_server *ovsdb_jsonrpc_server_create(void);
 bool ovsdb_jsonrpc_server_add_db(struct ovsdb_jsonrpc_server *,
@@ -58,6 +68,7 @@ struct ovsdb_jsonrpc_remote_status {
     int n_connections;
     ovs_be16 bound_port;
 };
+
 bool ovsdb_jsonrpc_server_get_remote_status(
     const struct ovsdb_jsonrpc_server *, const char *target,
     struct ovsdb_jsonrpc_remote_status *);
@@ -72,21 +83,14 @@ size_t ovsdb_jsonrpc_server_sessions_count(
     struct ovsdb_jsonrpc_server *, struct ovsdb_jsonrpc_remote *);
 
 struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_server_first_session(
-    struct ovsdb_jsonrpc_server *, struct ovsdb_jsonrpc_remote *);
+    const struct ovsdb_jsonrpc_server *, const struct ovsdb_jsonrpc_remote *);
 
 void ovsdb_jsonrpc_server_get_memory_usage(const struct ovsdb_jsonrpc_server *,
                                            struct simap *usage);
 
-struct ovsdb_jsonrpc_monitor;
-void ovsdb_jsonrpc_monitor_destroy(struct ovsdb_jsonrpc_monitor *);
-void ovsdb_jsonrpc_disable_monitor2(void);
+void ovsdb_jsonrpc_server_add_session(struct ovsdb_jsonrpc_server *,
+                                      struct stream *,
+                                      struct ovsdb_jsonrpc_remote *,
+                                      uint8_t dscp);
 
-struct ovsdb_jsonrpc_session;
-void ovsdb_jsonrpc_session_get_status(
-    const struct ovsdb_jsonrpc_session *session,
-    struct ovsdb_jsonrpc_remote_status *status);
-
-struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_session_create(
-    struct ovsdb_jsonrpc_server *server, struct jsonrpc_session *js,
-    struct ovsdb_jsonrpc_remote *remote);
 #endif /* ovsdb/jsonrpc-server.h */
