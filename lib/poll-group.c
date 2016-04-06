@@ -26,50 +26,12 @@
 #include "util.h"
 #include "openvswitch/vlog.h"
 #include "poll-group.h"
-#include "poll-group-provider.h"
 
 VLOG_DEFINE_THIS_MODULE(poll_group);
 
 static void add_caller_event(struct poll_group *group, void *caller_event);
-
-static const struct poll_group_class *
-poll_group_select_class(const char *name, size_t len)
-{
-#ifdef __linux__
-    if (!strncmp(name, "epoll", len) || name[len] != ':') {
-        return &epoll_group_class;
-    }
-#endif
-    return NULL;
-}
-
-static int
-poll_group_is_valid(struct poll_group *group)
-{
-     const struct poll_group_class *class;
-     if (!group) {
-         return PG_ERROR_NO_GROUP;
-     }
-
-     class = group->class;
-     if (!class) {
-         return PG_ERROR_NO_CLASS;
-     }
-
-     if (!poll_group_class_is_valid(class)) {
-         return PG_ERROR_INVALID_CLASS;
-     }
-
-    return 0;
-}
 
 
-const char *
-poll_group_get_name(const struct poll_group *group)
-{
-    return group->name;
-}
-
 void
 poll_group_init(struct poll_group *group,
                 const char *name,
@@ -84,29 +46,11 @@ poll_group_init(struct poll_group *group,
     group->n_allocated = 0;
 }
 
-/* poll_group name is specified in tow parts "<class>:<name>",
- * The class is used by 'poll_group_select_class' to select
- * poll group implementation. 'name' is the name of the poll group
- * mostly for logging purpose.   */
 struct poll_group *
-poll_group_create(const char *name)
+poll_group_create(void)
 {
-    const struct poll_group_class *class;
-    size_t prefix_len;
     struct poll_group *group = NULL;
 
-    prefix_len = strcspn(name, ":");
-    class = poll_group_select_class(name, prefix_len);
-
-    if (poll_group_class_is_valid(class)) {
-        const char *group_name;
-        if (name[prefix_len] == '\0') {
-            group_name = name;
-        } else {
-            group_name = &name[prefix_len + 1];
-        }
-        group = class->create(group_name);
-    }
 
     return group;
 }
@@ -118,7 +62,6 @@ poll_group_close(struct poll_group *group)
 
     if (ret) {
         group->class->close(group);
-        group->n_allocated = 0;
         group->n_allocated = 0;
         group->n_joined = 0;
 

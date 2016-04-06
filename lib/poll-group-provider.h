@@ -118,7 +118,7 @@ struct poll_group {
     size_t n_joined;    /* Total number of joined streams.  */
 
 
-    /* Data storage provide for implementing poll_group_get_events().
+    /* Data storage provided for implementing poll_group_get_events().
      * The size of **events buffer will be managed such that its size can
      * accommodate at least up to 'n_events' of void pointer array.
      *
