@@ -33,6 +33,7 @@
 #include "json.h"
 #include "jsonrpc.h"
 #include "jsonrpc-server.h"
+#include "jsonrpc-sessions.h"
 #include "openvswitch/list.h"
 #include "memory.h"
 #include "monitor.h"

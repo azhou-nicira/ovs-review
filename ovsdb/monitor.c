@@ -34,6 +34,7 @@
 #include "timeval.h"
 #include "transaction.h"
 #include "jsonrpc-server.h"
+#include "jsonrpc-sessions.h"
 #include "monitor.h"
 #include "openvswitch/vlog.h"
 
