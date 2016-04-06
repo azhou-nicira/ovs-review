@@ -19,6 +19,7 @@
 #include "jsonrpc.h"
 #include "jsonrpc-remote.h"
 #include "jsonrpc-server.h"
+#include "jsonrpc-sessions.h"
 #include "openvswitch/vlog.h"
 #include "reconnect.h"
 #include "simap.h"
@@ -108,10 +109,8 @@ ovsdb_jsonrpc_remote_run(struct ovsdb_jsonrpc_remote *remote)
 
         error = pstream_accept(remote->listener, &stream);
         if (!error) {
-            struct jsonrpc_session *js;
-            js = jsonrpc_session_open_unreliably(jsonrpc_open(stream),
-                                                 remote->dscp);
-            ovsdb_jsonrpc_session_create(remote->server, js, remote);
+            ovsdb_jsonrpc_server_add_session(remote->server, stream,
+                                             remote, remote->dscp);
         } else if (error != EAGAIN) {
             VLOG_WARN_RL(&rl, "%s: accept failed: %s",
                          pstream_get_name(remote->listener),
