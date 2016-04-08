@@ -47,12 +47,20 @@ VLOG_DEFINE_THIS_MODULE(ovsdb_jsonrpc_server);
 struct ovsdb_jsonrpc_remote;
 struct ovsdb_jsonrpc_session;
 
+static void sessions_handler_init(struct sessions_handler *);
+static void sessions_handler_destroy(struct sessions_handler *);
+static struct sessions_handler *main_handler(
+    const struct ovsdb_jsonrpc_server *);
+static struct ovs_list *main_handler_sessions(
+    const struct ovsdb_jsonrpc_server *);
+
 /* Remotes. */
 static struct ovsdb_jsonrpc_remote *ovsdb_jsonrpc_server_add_remote(
     struct ovsdb_jsonrpc_server *, const char *name,
     const struct ovsdb_jsonrpc_options *options
 );
-static void ovsdb_jsonrpc_server_del_remote(struct shash_node *);
+static void ovsdb_jsonrpc_server_del_remote(struct ovsdb_jsonrpc_server *,
+                                            struct shash_node *);
 
 
 /* Creates and returns a new server to provide JSON-RPC access to an OVSDB.
@@ -65,7 +73,12 @@ ovsdb_jsonrpc_server_create(void)
     struct ovsdb_jsonrpc_server *server = xzalloc(sizeof *server);
     ovsdb_server_init(&server->up);
     shash_init(&server->remotes);
-    ovs_list_init(&server->all_sessions);
+
+    /* Only create the main handler */
+    server->handlers = xmalloc(sizeof (struct sessions_handler));
+    server->n_handlers = 1;
+    sessions_handler_init(main_handler(server));
+
     return server;
 }
 
@@ -97,6 +110,7 @@ void
 ovsdb_jsonrpc_server_set_remotes(struct ovsdb_jsonrpc_server *svr,
                                  const struct shash *new_remotes)
 {
+    struct ovs_list *sessions = main_handler_sessions(svr);
     struct shash_node *node, *next;
 
     SHASH_FOR_EACH_SAFE (node, next, &svr->remotes) {
@@ -106,9 +120,9 @@ ovsdb_jsonrpc_server_set_remotes(struct ovsdb_jsonrpc_server *svr,
 
         if (!options) {
             VLOG_INFO("%s: remote deconfigured", node->name);
-            ovsdb_jsonrpc_server_del_remote(node);
+            ovsdb_jsonrpc_server_del_remote(svr, node);
         } else if (!ovsdb_jsonrpc_remote_options_can_change(remote, options)) {
-            ovsdb_jsonrpc_server_del_remote(node);
+            ovsdb_jsonrpc_server_del_remote(svr, node);
         }
     }
     SHASH_FOR_EACH (node, new_remotes) {
@@ -123,8 +137,7 @@ ovsdb_jsonrpc_server_set_remotes(struct ovsdb_jsonrpc_server *svr,
             }
         }
 
-        ovsdb_jsonrpc_sessions_set_options(&svr->all_sessions, remote,
-                                           options);
+        ovsdb_jsonrpc_sessions_set_options(sessions, remote, options);
     }
 }
 
@@ -143,24 +156,23 @@ ovsdb_jsonrpc_server_add_remote(struct ovsdb_jsonrpc_server *svr,
 
     shash_add(&svr->remotes, name, remote);
     if (!listener) {
-        struct ovsdb_jsonrpc_server *server;
-        server = ovsdb_jsonrpc_remote_get_server(remote);
-        ovsdb_jsonrpc_session_create(server, jsonrpc_session_open(name, true),
-                                     remote);
+        ovsdb_jsonrpc_session_create(svr, jsonrpc_session_open(name, true),
+                                     remote, main_handler(svr));
     }
     return remote;
 }
 
 static void
-ovsdb_jsonrpc_server_del_remote(struct shash_node *node)
+ovsdb_jsonrpc_server_del_remote(struct ovsdb_jsonrpc_server *svr,
+                                 struct shash_node *node)
 {
     struct ovsdb_jsonrpc_remote *remote = node->data;
-    struct ovsdb_jsonrpc_server *server;
+    struct ovs_list *sessions;
 
-    server = ovsdb_jsonrpc_remote_get_server(remote);
-    ovsdb_jsonrpc_sessions_close(&server->all_sessions, remote);
+    sessions = main_handler_sessions(svr);
+    ovsdb_jsonrpc_sessions_close(sessions, remote);
     ovsdb_jsonrpc_remote_destroy(remote);
-    shash_delete(&server->remotes, node);
+    shash_delete(&svr->remotes, node);
     free(remote);
 }
 
@@ -198,26 +210,28 @@ ovsdb_jsonrpc_server_free_remote_status(
 void
 ovsdb_jsonrpc_server_run(struct ovsdb_jsonrpc_server *svr)
 {
+    struct ovs_list *sessions = main_handler_sessions(svr);
     struct shash_node *node;
 
     SHASH_FOR_EACH (node, &svr->remotes) {
         struct ovsdb_jsonrpc_remote *remote = node->data;
 
         ovsdb_jsonrpc_remote_run(remote);
-        ovsdb_jsonrpc_sessions_run(&svr->all_sessions);
+        ovsdb_jsonrpc_sessions_run(sessions);
     }
 }
 
 void
 ovsdb_jsonrpc_server_wait(struct ovsdb_jsonrpc_server *svr)
 {
+    struct ovs_list *sessions = main_handler_sessions(svr);
     struct shash_node *node;
 
     SHASH_FOR_EACH (node, &svr->remotes) {
         struct ovsdb_jsonrpc_remote *remote = node->data;
 
         ovsdb_jsonrpc_remote_wait(remote);
-        ovsdb_jsonrpc_sessions_wait(&svr->all_sessions);
+        ovsdb_jsonrpc_sessions_wait(sessions);
     }
 }
 
@@ -242,20 +256,27 @@ void
 ovsdb_jsonrpc_server_destroy(struct ovsdb_jsonrpc_server *svr)
 {
     struct shash_node *node, *next;
+    unsigned int i;
 
     SHASH_FOR_EACH_SAFE (node, next, &svr->remotes) {
-        ovsdb_jsonrpc_server_del_remote(node);
+        ovsdb_jsonrpc_server_del_remote(svr, node);
     }
+
+    for (i = 0; i < svr->n_handlers; i++) {
+        sessions_handler_destroy(&svr->handlers[i]);
+    }
+    free(svr->handlers);
     shash_destroy(&svr->remotes);
     ovsdb_server_destroy(&svr->up);
     free(svr);
 }
 
 size_t
-ovsdb_jsonrpc_server_sessions_count(struct ovsdb_jsonrpc_server *server,
+ovsdb_jsonrpc_server_sessions_count(struct ovsdb_jsonrpc_server *svr,
                                     struct ovsdb_jsonrpc_remote *remote)
 {
-    return ovsdb_jsonrpc_sessions_count(&server->all_sessions, remote);
+    struct ovs_list *sessions = main_handler_sessions(svr);
+    return ovsdb_jsonrpc_sessions_count(sessions, remote);
 }
 
 struct ovsdb_jsonrpc_options *
@@ -274,12 +295,13 @@ ovsdb_jsonrpc_default_options(const char *target)
 void
 ovsdb_jsonrpc_server_reconnect(struct ovsdb_jsonrpc_server *svr)
 {
+    struct ovs_list *sessions = main_handler_sessions(svr);
     struct shash_node *node;
 
     SHASH_FOR_EACH (node, &svr->remotes) {
         struct ovsdb_jsonrpc_remote *remote = node->data;
 
-        ovsdb_jsonrpc_sessions_reconnect(&svr->all_sessions, remote);
+        ovsdb_jsonrpc_sessions_reconnect(sessions, remote);
     }
 }
 
@@ -289,16 +311,19 @@ void
 ovsdb_jsonrpc_server_get_memory_usage(const struct ovsdb_jsonrpc_server *svr,
                                       struct simap *usage)
 {
-    ovsdb_jsonrpc_sessions_get_memory_usage(&svr->all_sessions, usage);
+    struct ovs_list *sessions = main_handler_sessions(svr);
+    ovsdb_jsonrpc_sessions_get_memory_usage(sessions, usage);
     simap_increase(usage, "sessions", svr->n_sessions);
 }
 
-/* Get the first session in 'all_sessions' that matches the 'remote'. */
+/* Get the first session within the main handler sessions that matches
+ * the 'remote'. */
 struct ovsdb_jsonrpc_session *
 ovsdb_jsonrpc_server_first_session(const struct ovsdb_jsonrpc_server *svr,
                                    const struct ovsdb_jsonrpc_remote *remote)
 {
-    return ovsdb_jsonrpc_sessions_first(&svr->all_sessions, remote);
+    struct ovs_list *sessions = main_handler_sessions(svr);
+    return ovsdb_jsonrpc_sessions_first(sessions, remote);
 }
 
 void
@@ -308,6 +333,31 @@ ovsdb_jsonrpc_server_add_session(struct ovsdb_jsonrpc_server *svr,
                                  uint8_t dscp)
 {
     struct jsonrpc_session *js;
+
     js = jsonrpc_session_open_unreliably(jsonrpc_open(stream), dscp);
-    ovsdb_jsonrpc_session_create(svr, js, remote);
+    ovsdb_jsonrpc_session_create(svr, js, remote, main_handler(svr));
+}
+
+static void
+sessions_handler_init(struct sessions_handler *handler)
+{
+    ovs_list_init(&handler->all_sessions);
+}
+
+static void
+sessions_handler_destroy(struct sessions_handler *handler)
+{
+    ovs_assert(ovs_list_is_empty(&handler->all_sessions));
+}
+
+static struct sessions_handler *
+main_handler(const struct ovsdb_jsonrpc_server *svr)
+{
+    return &svr->handlers[0];
+}
+
+static struct ovs_list *
+main_handler_sessions(const struct ovsdb_jsonrpc_server *svr)
+{
+    return &main_handler(svr)->all_sessions;
 }
