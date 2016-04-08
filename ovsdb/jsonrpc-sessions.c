@@ -501,7 +501,8 @@ ovsdb_jsonrpc_session_send(struct ovsdb_jsonrpc_session *s,
 struct ovsdb_jsonrpc_session *
 ovsdb_jsonrpc_session_create(struct ovsdb_jsonrpc_server *server,
                              struct jsonrpc_session *js,
-                             struct ovsdb_jsonrpc_remote *remote)
+                             struct ovsdb_jsonrpc_remote *remote,
+                             struct sessions_handler *handler)
 {
     struct ovsdb_jsonrpc_session *s;
 
@@ -509,11 +510,11 @@ ovsdb_jsonrpc_session_create(struct ovsdb_jsonrpc_server *server,
     ovsdb_session_init(&s->up, &server->up);
     s->remote = remote;
     s->server = server;
-    ovs_list_push_back(&server->all_sessions, &s->node);
     hmap_init(&s->triggers);
     hmap_init(&s->monitors);
     s->js = js;
     s->js_seqno = jsonrpc_session_get_seqno(js);
+    ovs_list_push_back(&handler->all_sessions, &s->node);
 
     /* Let server know about session membership change.  */
     server->n_sessions++;

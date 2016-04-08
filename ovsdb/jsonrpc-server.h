@@ -27,13 +27,35 @@ struct simap;
 struct stream;
 struct ovs_list;
 struct ovsdb_jsonrpc_remote;
+struct sessions_handler;
+
+/* Sessions_handler. */
+struct sessions_handler {
+    struct ovs_list all_sessions;  /* List of 'ovsdb_jsonrpc_session's.   */
+};
 
 /* JSON-RPC database server. */
 struct ovsdb_jsonrpc_server {
     struct ovsdb_server up;
     unsigned int n_sessions;
     struct shash remotes;      /* Contains "struct ovsdb_jsonrpc_remote *"s. */
-    struct ovs_list all_sessions;  /* List of 'ovsdb_jsonrpc_session's.   */
+
+    /* Handlers for 'ovs_list' that contains 'ovsdb_jsonrpc_sessions'.
+     *
+     * Each 'handler' handles a set of ovdb_jsonrpc_sessions.
+     * When OVSDB runs in a multi-threaded environment, there will be
+     * exactly 'n + 1' handlers for 'n' threads.  Each thread owns
+     * one handler, plus the main handler owned by the main process.
+     * the main process's handler is called the 'main handler'.
+     *
+     * The 'main handler' is always the first handler of the array.
+     *
+     * The handlers are statically allocated for the server; they
+     * are crated when ovsdb_jsonrpc_server is crated.  Once created,
+     * both 'n_handlers' and 'handlers' are never changed or moved until
+     * the server is destroyed.    */
+    struct sessions_handler *handlers;
+    unsigned int n_handlers;
 };
 
 struct ovsdb_jsonrpc_server *ovsdb_jsonrpc_server_create(void);
@@ -47,7 +69,7 @@ void ovsdb_jsonrpc_server_destroy(struct ovsdb_jsonrpc_server *);
 struct ovsdb_jsonrpc_options {
     int max_backoff;            /* Maximum reconnection backoff, in msec. */
     int probe_interval;         /* Max idle time before probing, in msec. */
-    int dscp;                   /* Dscp value for manager connections */
+    int dscp;                   /* DSCP value for manager connections */
 };
 struct ovsdb_jsonrpc_options *
 ovsdb_jsonrpc_default_options(const char *target);
