@@ -128,12 +128,6 @@ ovsdb_jsonrpc_remote_wait(struct ovsdb_jsonrpc_remote *remote)
 }
 
 
-struct ovsdb_jsonrpc_server *
-ovsdb_jsonrpc_remote_get_server(struct ovsdb_jsonrpc_remote *remote)
-{
-    return remote->server;
-}
-
 /* Returns 'true' if remote can be update to 'new_options' without
  * shutdown the existing connection first.  'false' otherwise.  */
 bool
