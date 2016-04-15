@@ -57,4 +57,8 @@ struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_session_create(
 
 bool ovsdb_jsonrpc_session_handled_locally(struct ovsdb_jsonrpc_session *s);
 
+struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_session_ref(
+    const struct ovsdb_jsonrpc_session *session);
+void ovsdb_jsonrpc_session_unref(const struct ovsdb_jsonrpc_session *session);
+
 #endif /* ovsdb/jsonrpc-session.h */

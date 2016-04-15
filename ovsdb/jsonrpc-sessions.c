@@ -25,6 +25,7 @@
 #include "monitor.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/vlog.h"
+#include "ovs-atomic.h"
 #include "ovsdb-error.h"
 #include "ovsdb.h"
 #include "ovsdb-parser.h"
@@ -573,16 +574,15 @@ ovsdb_jsonrpc_session_close(struct ovsdb_jsonrpc_session *s)
     hmap_destroy(&s->triggers);
 
     jsonrpc_session_close(s->js);
-    ovs_list_remove(&s->node);
-    ovsdb_jsonrpc_session_unref(s);
     ovsdb_session_destroy(&s->up);
 
     /* Let server know about session membership change.  */
     atomic_count_dec(&server->n_sessions);
 
     ovs_list_remove(&s->node);
-    free(s);
+    ovsdb_jsonrpc_session_unref(s);
 }
+
 
 /* JSON-RPC database server triggers.
  *
@@ -1151,6 +1151,12 @@ ovsdb_jsonrpc_sessions_get_memory_usage(const struct ovs_list *sessions,
     }
 }
 
+bool
+ovsdb_jsonrpc_session_handled_locally(struct ovsdb_jsonrpc_session *s)
+{
+    return s->handler == *per_thread_handler_get();
+}
+
 void
 ovsdb_jsonrpc_sessions_add(struct ovs_list *sessions,
                            struct ovsdb_jsonrpc_session *s)
@@ -1158,8 +1164,25 @@ ovsdb_jsonrpc_sessions_add(struct ovs_list *sessions,
     ovs_list_push_back(sessions, &s->node);
 }
 
-bool
-ovsdb_jsonrpc_session_handled_locally(struct ovsdb_jsonrpc_session *s)
+struct ovsdb_jsonrpc_session *
+ovsdb_jsonrpc_session_ref(const struct ovsdb_jsonrpc_session *session_)
 {
-    return s->handler == *per_thread_handler_get();
+    struct ovsdb_jsonrpc_session *session;
+
+    session = CONST_CAST(struct ovsdb_jsonrpc_session *, session_);
+    if (session) {
+        ovs_refcount_ref(&session->refcount);
+    }
+    return session;
+}
+
+void
+ovsdb_jsonrpc_session_unref(const struct ovsdb_jsonrpc_session *session_)
+{
+    struct ovsdb_jsonrpc_session *session;
+
+    session = CONST_CAST(struct ovsdb_jsonrpc_session *, session_);
+    if (session && ovs_refcount_unref(&session->refcount) == 1) {
+        free(session);
+    }
 }
