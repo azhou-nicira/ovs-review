@@ -23,6 +23,7 @@
 #include "openvswitch/dynamic-string.h"
 #include "json.h"
 #include "jsonrpc.h"
+#include "ovs-atomic.h"
 #include "ovsdb-error.h"
 #include "ovsdb-parser.h"
 #include "ovsdb.h"
@@ -56,6 +57,7 @@ struct ovsdb_monitor {
     uint64_t n_transactions;      /* Count number of committed transactions. */
     struct hmap_node hmap_node;   /* Elements within ovsdb_monitors.  */
     struct hmap json_cache;       /* Contains "ovsdb_monitor_json_cache_node"s.*/
+    struct ovs_refcount refcount;
 };
 
 /* A json object of updates between 'from_txn' and 'dbmon->n_transactions'
@@ -332,6 +334,7 @@ ovsdb_monitor_create(struct ovsdb *db,
     shash_init(&dbmon->tables);
     hmap_node_nullify(&dbmon->hmap_node);
     hmap_init(&dbmon->json_cache);
+    ovs_refcount_init(&dbmon->refcount);
 
     ovsdb_monitor_add_jsonrpc_monitor(dbmon, jsonrpc_monitor);
     return dbmon;
@@ -1081,10 +1084,11 @@ ovsdb_monitor_add(struct ovsdb_monitor *new_dbmon)
     hash = ovsdb_monitor_hash(new_dbmon, 0);
     HMAP_FOR_EACH_WITH_HASH(dbmon, hmap_node, hash, &ovsdb_monitors) {
         if (ovsdb_monitor_equal(dbmon,  new_dbmon)) {
-            return dbmon;
+            return ovsdb_monitor_ref(dbmon);
         }
     }
 
+    ovsdb_monitor_ref(new_dbmon);
     hmap_insert(&ovsdb_monitors, &new_dbmon->hmap_node, hash);
     return new_dbmon;
 }
@@ -1116,7 +1120,7 @@ ovsdb_monitor_destroy(struct ovsdb_monitor *dbmon)
         free(mt);
     }
     shash_destroy(&dbmon->tables);
-    free(dbmon);
+    ovsdb_monitor_unref(dbmon);
 }
 
 static struct ovsdb_error *
@@ -1175,6 +1179,31 @@ ovsdb_monitor_get_memory_usage(struct simap *usage)
 
     HMAP_FOR_EACH(dbmon, hmap_node,  &ovsdb_monitors) {
         simap_increase(usage, "json-caches", hmap_count(&dbmon->json_cache));
+    }
+}
+struct ovsdb_monitor *
+ovsdb_monitor_ref(const struct ovsdb_monitor *monitor_)
+{
+    struct ovsdb_monitor *monitor;
+
+    monitor = CONST_CAST(struct ovsdb_monitor *, monitor_);
+
+    if (monitor) {
+        ovs_refcount_ref(&monitor->refcount);
+    }
+
+    return monitor;
+}
+
+void
+ovsdb_monitor_unref(const struct ovsdb_monitor * monitor_)
+{
+    struct ovsdb_monitor *monitor;
+
+    monitor = CONST_CAST(struct ovsdb_monitor *, monitor_);
+
+    if (monitor && ovs_refcount_unref(&monitor->refcount) == 1) {
+        free(monitor);
     }
 }
 
