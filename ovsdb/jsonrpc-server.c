@@ -178,7 +178,7 @@ ovsdb_jsonrpc_server_add_remote(struct ovsdb_jsonrpc_server *svr,
         return remote;
     }
 
-    shash_add(&svr->remotes, name, remote);
+    shash_add(&svr->remotes, name, ovsdb_jsonrpc_remote_ref(remote));
     if (!listener) {
         ovsdb_jsonrpc_session_create(svr, jsonrpc_session_open(name, true),
                                      remote, main_handler_sessions(svr));
@@ -197,7 +197,7 @@ ovsdb_jsonrpc_server_del_remote(struct ovsdb_jsonrpc_server *svr,
     ovsdb_jsonrpc_sessions_close(sessions, remote);
     ovsdb_jsonrpc_remote_destroy(remote);
     shash_delete(&svr->remotes, node);
-    free(remote);
+    ovsdb_jsonrpc_remote_unref(remote);
 }
 
 /* Stores status information for the remote named 'target', which should have
