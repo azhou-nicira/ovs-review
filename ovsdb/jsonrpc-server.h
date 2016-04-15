@@ -115,4 +115,119 @@ void ovsdb_jsonrpc_server_add_session(struct ovsdb_jsonrpc_server *,
                                       struct ovsdb_jsonrpc_remote *,
                                       uint8_t dscp);
 
+/* OVSDB server Multi-Threading design
+ * ==================================
+ *
+ * Number of threads
+ * =================
+ * OVSDB server start 'n' pthreads to scale up the handling of jsonrpc
+ * sessions. The 'n' whatever user specifies as the 'max_threads' parameter
+ * ovsdb-server receives on the command line.
+ *
+ * Session to thread assignment
+ * ============================
+ * Currently it is randomly assigned for simplicity. (We can change to
+ * assigning based on load if that is more useful). Once assigned, the
+ * sessions will always be handled by the same thread.
+ *
+ * Using Messages between threads (IPC)
+ * ====================================
+ * Each thread can send and receive IPC messages to and from another thread.
+ * There are two benefits of using IPC messages. Using IPC messages lessen
+ * the requirement for each object to be thread safe, by funneling operations
+ * of an object into a single thread.  More importantly, IPC messages are
+ * asynchronous; the sending thread can continue processing without waiting
+ * for the work to be done.
+ *
+ * Thread safety consideration for OVSDB objects
+ * =============================================
+ * Life Cycle:
+ *      If an object is always created and destroyed by a single thread, then
+ *      its membership in a group (e.g. in a linked list) can be managed
+ *      lock free. On the other hand, synchronization is required and
+ *      should be documented.
+ *
+ *      Note, in case of Opaque pointer, the physical memory of the object
+ *      can freed by another thread. But this does not change the
+ *      synchronization requirement of object destruction.
+ *
+ * Access:
+ *      If an object is always accessed by a single thread, it can be
+ *      accessed lock-free. Otherwise, synchronization is required
+ *      and documented below.
+ *
+ * Opaque Pointer:
+ *      Besides access to an object, a thread can also hold an opaque
+ *      pointer for the purposes of identifying an object (i.e. to match
+ *      an object by matching the pointer value), or use it inside an
+ *      IPC messages in order to communicate with another thread.
+ *
+ *      As long as opaque pointer exists, the memory of this object needs
+ *      to be occupied to prevent OS from minting another object with
+ *      the same address.  Reference counting is an well understood
+ *      technique that prevents dangling pointers. OVSDB threads
+ *      implementation uses 'struct ovs_refcount' for all objects that
+ *      may hand out opaque pointers.
+ *
+ * Details:
+ * -------
+ * Remote:
+ *      Remotes is always created, destroyed by the main process, and
+ *      can be accessed by the main process lock free.  It can hand out
+ *      opaque pointers to be embedded in 'Sessions' and in IPC thus
+ *      should be reference counted.
+ *
+ * Sessions:
+ *      Sessions are always created and destroyed and accessed by the
+ *      same thread. These access are lock free. Sessions can be passed
+ *      into OVSDB locks as opaque pointers.
+ *
+ * Locks:
+ *      Locks can be created by a session from any thread, To ensure
+ *      lock uniqueness, a global database lock is required for creating
+ *      and destroy locks. Access to locks require the same lock.
+ *
+ *      Each session holds a lock waiter (i.e. ovsdb_jsonrpc_lock_waiter)
+ *      structure. The lock waiter structure is created and managed by
+ *      each thread. The pointer to a lock waiter valid if and only if
+ *      its associated session is valid.  Thus pointers to lock waiter
+ *      does not need to be reference counted.
+ *
+ *      Each session accesses lock via the lock waiter.  When a lock is
+ *      'unlocked', the 'unlocking' session should inform the next 'waiter'
+ *      session on the lock via IPC message, in case the 'waiter' is not
+ *      running on the same thread.
+ *
+ * Monitor:
+ *      Monitors are always created and destroyed by the main process.
+ *      Sessions send IPC message to the main process to create or
+ *      destroy them.  Main process responds to monitor creation IPC
+ *      with a pointer to the monitor, which can be shared with other
+ *      sessions.
+ *
+ *      Access to monitor requires per monitor lock, since both the main
+ *      process and sessions can access monitor concurrently.
+ *      An Opaque pointer can be embedded in an IPC message, thus needs to
+ *      be reference counted.
+ *
+ * Trigger:
+ *      Triggers are always created and destroyed by the main process.
+ *      Sessions send IPC message to the main process to create or destroy
+ *      them. Access to them requires per trigger lock.
+ *
+ * Summary:
+ * --------
+ *
+ * Notation:
+ *    LF -- lock free
+ *    L  -- lock
+ *
+ * Object     Life cycle      Access           Ref count pointer
+ * =======================================================================
+ * Remote     LF              LF               Yes
+ * Session    LF              LF               Yes
+ * Monitor    LF              L                Yes
+ * Lock       LF              L                No
+ * trigger    LF              L                Yes
+ * */
 #endif /* ovsdb/jsonrpc-server.h */
