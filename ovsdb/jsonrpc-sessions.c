@@ -574,6 +574,7 @@ ovsdb_jsonrpc_session_close(struct ovsdb_jsonrpc_session *s)
 
     jsonrpc_session_close(s->js);
     ovs_list_remove(&s->node);
+    ovsdb_jsonrpc_session_unref(s);
     ovsdb_session_destroy(&s->up);
 
     /* Let server know about session membership change.  */
