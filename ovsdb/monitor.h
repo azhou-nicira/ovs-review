@@ -79,4 +79,7 @@ bool ovsdb_monitor_needs_flush(struct ovsdb_monitor *dbmon,
 void ovsdb_monitor_get_initial(const struct ovsdb_monitor *dbmon);
 
 void ovsdb_monitor_get_memory_usage(struct simap *usage);
+
+struct ovsdb_monitor *ovsdb_monitor_ref(const struct ovsdb_monitor *);
+void ovsdb_monitor_unref(const struct ovsdb_monitor *);
 #endif
