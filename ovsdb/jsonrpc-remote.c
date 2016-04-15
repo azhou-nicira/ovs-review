@@ -21,6 +21,7 @@
 #include "jsonrpc-server.h"
 #include "jsonrpc-sessions.h"
 #include "openvswitch/vlog.h"
+#include "ovs-atomic.h"
 #include "reconnect.h"
 #include "simap.h"
 #include "stream.h"
@@ -41,6 +42,7 @@ struct ovsdb_jsonrpc_remote {
     struct ovsdb_jsonrpc_server *server;
     struct pstream *listener;   /* Listener, if passive. */
     uint8_t dscp;
+    struct ovs_refcount refcount;  /* for freeing memory. */
 };
 
 struct ovsdb_jsonrpc_remote *
@@ -62,6 +64,7 @@ ovsdb_jsonrpc_remote_create(struct ovsdb_jsonrpc_server *svr,
     remote->server = svr;
     remote->listener = *listener;
     remote->dscp = options->dscp;
+    ovs_refcount_init(&remote->refcount);
 
     return remote;
 }
@@ -127,7 +130,6 @@ ovsdb_jsonrpc_remote_wait(struct ovsdb_jsonrpc_remote *remote)
     }
 }
 
-
 /* Returns 'true' if remote can be update to 'new_options' without
  * shutdown the existing connection first.  'false' otherwise.  */
 bool
@@ -138,3 +140,25 @@ ovsdb_jsonrpc_remote_options_can_change(
     return (remote->dscp == new_options->dscp);
 }
 
+struct ovsdb_jsonrpc_remote *
+ovsdb_jsonrpc_remote_ref(const struct ovsdb_jsonrpc_remote *remote_)
+{
+    struct ovsdb_jsonrpc_remote *remote;
+
+    remote = CONST_CAST(struct ovsdb_jsonrpc_remote *, remote_);
+    if (remote) {
+        ovs_refcount_ref(&remote->refcount);
+    }
+    return remote;
+}
+
+void
+ovsdb_jsonrpc_remote_unref(const struct ovsdb_jsonrpc_remote *remote_)
+{
+    struct ovsdb_jsonrpc_remote *remote;
+
+    remote = CONST_CAST(struct ovsdb_jsonrpc_remote *, remote_);
+    if (remote && ovs_refcount_unref(&remote->refcount) == 1) {
+        free(remote);
+    }
+}
