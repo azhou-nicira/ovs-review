@@ -17,6 +17,7 @@
 #define OVSDB_TRIGGER_H 1
 
 #include "openvswitch/list.h"
+#include "ovs-atomic.h"
 
 struct ovsdb;
 
@@ -29,6 +30,9 @@ struct ovsdb_trigger {
     struct json *result;        /* Result (null if none yet). */
     long long int created;      /* Time created. */
     long long int timeout_msec; /* Max wait duration. */
+
+    struct ovs_refcount refcount; /* Number of Outanding pointers . */
+
 };
 
 void ovsdb_trigger_init(struct ovsdb_session *, struct ovsdb *,
@@ -41,5 +45,8 @@ struct json *ovsdb_trigger_steal_result(struct ovsdb_trigger *);
 
 void ovsdb_trigger_run(struct ovsdb *, long long int now);
 void ovsdb_trigger_wait(struct ovsdb *, long long int now);
+
+struct ovsdb_trigger *ovsdb_trigger_ref(const struct ovsdb_trigger *);
+void ovsdb_trigger_unref(const struct ovsdb_trigger *);
 
 #endif /* ovsdb/trigger.h */
