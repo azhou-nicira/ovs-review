@@ -701,7 +701,7 @@ ovsdb_jsonrpc_trigger_complete(struct ovsdb_jsonrpc_trigger *t)
     json_destroy(t->id);
     ovsdb_trigger_destroy(&t->trigger);
     hmap_remove(&s->triggers, &t->hmap_node);
-    free(t);
+    ovsdb_trigger_unref(&t->trigger);
 }
 
 static void
