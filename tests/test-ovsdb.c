@@ -1368,7 +1368,7 @@ do_trigger_dump(struct test_trigger *t, long long int now, const char *title)
     free(s);
     json_destroy(result);
     ovsdb_trigger_destroy(&t->trigger);
-    free(t);
+    ovsdb_trigger_unref(&t->trigger);
 }
 
 static void

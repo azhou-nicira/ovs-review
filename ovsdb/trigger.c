@@ -41,6 +41,7 @@ ovsdb_trigger_init(struct ovsdb_session *session, struct ovsdb *db,
     trigger->created = now;
     trigger->timeout_msec = LLONG_MAX;
     ovsdb_trigger_try(trigger, now);
+    ovs_refcount_init(&trigger->refcount);
 }
 
 void
@@ -126,4 +127,27 @@ ovsdb_trigger_complete(struct ovsdb_trigger *t)
     ovs_assert(t->result != NULL);
     ovs_list_remove(&t->node);
     ovs_list_push_back(&t->session->completions, &t->node);
+}
+
+struct ovsdb_trigger *
+ovsdb_trigger_ref(const struct ovsdb_trigger *trigger_)
+{
+    struct ovsdb_trigger *trigger;
+
+    trigger = CONST_CAST(struct ovsdb_trigger *, trigger_);
+    if (trigger) {
+        ovs_refcount_ref(&trigger->refcount);
+    }
+    return trigger;
+}
+
+void
+ovsdb_trigger_unref(const struct ovsdb_trigger *trigger_)
+{
+    struct ovsdb_trigger *trigger;
+
+    trigger = CONST_CAST(struct ovsdb_trigger *, trigger_);
+    if (trigger && ovs_refcount_unref(&trigger->refcount) == 1) {
+        free(trigger);
+    }
 }
