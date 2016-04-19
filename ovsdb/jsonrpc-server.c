@@ -97,8 +97,6 @@ static struct ovsdb_ipc *ovsdb_ipc_dup(struct ovsdb_ipc *);
 static struct ovsdb_ipc_ops *ipc_ops_get(enum ovsdb_ipc_type);
 static void ovsdb_ipc_broadcast(struct ovsdb_jsonrpc_server *svr,
                                 struct ovsdb_ipc *ipc);
-static void ovsdb_ipc_sendto(struct sessions_handler *handler,
-                             struct ovsdb_ipc *ipc);
 
 /* IPC implemenation helpers. */
 static void main_handler_execute_exclusive(
@@ -372,6 +370,56 @@ ovsdb_jsonrpc_server_del_remote(struct ovsdb_jsonrpc_server *svr,
     ovsdb_jsonrpc_remote_destroy(remote);
     shash_delete(&svr->remotes, node);
     ovsdb_jsonrpc_remote_unref(remote);
+}
+
+struct ovsdb_ipc_lock_notify {
+    struct ovsdb_ipc up;
+    struct ovsdb_jsonrpc_session *session;
+    char *lock_name;
+};
+
+struct ovsdb_ipc *
+ovsdb_ipc_lock_notify_create(struct ovsdb_jsonrpc_session *session,
+                             const char *lock_name)
+{
+    struct ovsdb_ipc_lock_notify *ipc = xmalloc(sizeof *ipc);
+
+    ovsdb_ipc_init(&ipc->up, OVSDB_IPC_LOCK_NOTIFY, sizeof *ipc);
+    ipc->session = ovsdb_jsonrpc_session_ref(session);
+    ipc->lock_name = xstrdup(lock_name);
+
+    return &ipc->up;
+}
+
+static void
+handle_LOCK_NOTIFY(struct sessions_handler *handler, struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_lock_notify *ipc;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_lock_notify, up);
+    ovsdb_jsonrpc_sessions_lock_notify(handler_sessions(handler),
+                                       ipc->session, ipc->lock_name);
+}
+
+static void
+dtor_LOCK_NOTIFY(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_lock_notify *ipc;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_lock_notify, up);
+    free(ipc->lock_name);
+    ovsdb_jsonrpc_session_unref(ipc->session);
+}
+
+static struct ovsdb_ipc *
+clone_LOCK_NOTIFY(struct ovsdb_ipc *ipc_ OVS_UNUSED)
+{
+    /* Lock notification should never be sent to one thread at a time.
+     * This function is only needed for broadcasting IPC message. So
+     * it should never be called. */
+    VLOG_FATAL("unexpected cloning LOCK notification IPC message");
+
+    return NULL;
 }
 
 /* Stores status information for the remote named 'target', which should have
@@ -873,7 +921,7 @@ ovsdb_ipc_sendto_(struct sessions_handler *handler, struct ovsdb_ipc *ipc)
 
 /* Send the 'ipc' to 'handler'. The receiving handler is responsible for
  * freeing the memory of 'ipc'.  */
-static void
+void
 ovsdb_ipc_sendto(struct sessions_handler *handler, struct ovsdb_ipc *ipc)
 {
     if (VLOG_IS_DBG_ENABLED()) {
@@ -1009,6 +1057,8 @@ ovsdb_ipc_msg_type_to_string(enum ovsdb_ipc_type ipc_type)
         return "reconnect";
     case OVSDB_IPC_SET_OPTIONS:
         return "set_options";
+    case OVSDB_IPC_LOCK_NOTIFY:
+        return "lock";
     case OVSDB_IPC_N_MESSAGES:
     default:
         ovs_fatal(0, "Not a valid IPC message");
