@@ -64,7 +64,7 @@ enum ovsdb_lock_mode {
 /* A session's request for a database lock. */
 struct ovsdb_lock_waiter {
     struct hmap_node session_node; /* In ->session->locks's hmap. */
-    struct ovsdb_lock *lock;    /* The lock being waited for. */
+    struct ovsdb_lock *lock;       /* The lock being waited for. */
 
     enum ovsdb_lock_mode mode;
     char *lock_name;
@@ -73,7 +73,9 @@ struct ovsdb_lock_waiter {
     struct ovs_list lock_node;  /* In ->lock->waiters's list. */
 };
 
-struct ovsdb_session *ovsdb_lock_waiter_remove(struct ovsdb_lock_waiter *);
+struct ovsdb_session *ovsdb_lock_waiter_remove(struct ovsdb_lock *lock,
+                                               struct ovsdb_lock_waiter *)
+    OVS_REQUIRES(lock->mutex);
 void ovsdb_lock_waiter_destroy(struct ovsdb_lock_waiter *);
 bool ovsdb_lock_waiter_is_owner(const struct ovsdb_lock_waiter *);
 

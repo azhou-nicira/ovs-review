@@ -307,16 +307,22 @@ ovsdb_jsonrpc_session_parse_lock_name(const struct jsonrpc_msg *request,
 }
 
 static void
-ovsdb_jsonrpc_session_notify(struct ovsdb_lock_waiter *waiter,
+ovsdb_jsonrpc_session_notify(struct ovsdb_session *session,
                              const char *lock_name,
                              const char *method)
 {
-    struct ovsdb_jsonrpc_session *s = waiter->session;
+    struct ovsdb_jsonrpc_session *s;
     struct json *params;
 
     s = CONTAINER_OF(session, struct ovsdb_jsonrpc_session, up);
-    params = json_array_create_1(json_string_create(lock_name));
-    ovsdb_jsonrpc_session_send(s, jsonrpc_create_notify(method, params));
+    if (ovsdb_jsonrpc_session_handled_locally(s)) {
+        params = json_array_create_1(json_string_create(lock_name));
+        ovsdb_jsonrpc_session_send(s, jsonrpc_create_notify(method, params));
+    } else {
+        struct ovsdb_ipc *ipc;
+        ipc = ovsdb_ipc_lock_notify_create(s, lock_name);
+        ovsdb_ipc_sendto(s->handler, ipc);
+    }
 }
 
 static struct jsonrpc_msg *
@@ -380,16 +386,42 @@ ovsdb_jsonrpc_session_unlock__(struct ovsdb_lock_waiter *waiter)
     struct ovsdb_lock *lock = waiter->lock;
 
     if (lock) {
-        struct ovsdb_session *new_owner = ovsdb_lock_waiter_remove(waiter);
+        ovs_mutex_lock(&lock->mutex);
+        struct ovsdb_session *new_owner = ovsdb_lock_waiter_remove(lock, waiter);
 
         if (new_owner) {
             ovsdb_jsonrpc_session_notify(new_owner, lock->name, "locked");
         } else {
             /* ovsdb_server_lock() might have freed 'lock'. */
         }
+        ovs_mutex_unlock(&lock->mutex);
     }
 
     ovsdb_lock_waiter_destroy(waiter);
+}
+
+void
+ovsdb_jsonrpc_sessions_lock_notify(struct ovs_list *sessions,
+                                   struct ovsdb_jsonrpc_session *session,
+                                   const char *lock_name)
+{
+    struct ovsdb_jsonrpc_session *s;
+
+    LIST_FOR_EACH (s, node, sessions) {
+        /* Only handle lock notification if the session is still alive
+         * within the handler. If the session has been deleted, send
+         * notification to the next waiter. */
+        if (s == session) {
+            struct ovsdb_lock_waiter *waiter;
+
+            waiter = ovsdb_session_get_lock_waiter(&s->up, lock_name);
+            ovs_assert(waiter);
+
+            ovsdb_jsonrpc_session_unlock__(waiter);
+        }
+    }
+    /* Ignore the message if the session has been deleted already.
+       The sesion deletion should have unlocked this lock.  */
 }
 
 static struct jsonrpc_msg *
