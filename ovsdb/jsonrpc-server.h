@@ -201,7 +201,8 @@ void ovsdb_jsonrpc_server_add_session(struct ovsdb_jsonrpc_server *,
        OVSDB_IPC_MESSAGE(NEW_SESSION) \
        OVSDB_IPC_MESSAGE(CLOSE_SESSIONS) \
        OVSDB_IPC_MESSAGE(RECONNECT) \
-       OVSDB_IPC_MESSAGE(SET_OPTIONS)
+       OVSDB_IPC_MESSAGE(SET_OPTIONS) \
+       OVSDB_IPC_MESSAGE(LOCK_NOTIFY)
 
 enum ovsdb_ipc_type {
 #define OVSDB_IPC_MESSAGE(MSG) OVSDB_IPC_##MSG,

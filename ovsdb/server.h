@@ -47,7 +47,8 @@ struct ovsdb_lock {
     struct hmap_node hmap_node;  /* In ovsdb_server's "locks" hmap. */
     struct ovsdb_server *server; /* The containing server. */
     char *name;                  /* Unique name. */
-    struct ovs_list waiters;     /* Contains "struct ovsdb_lock_waiter"s. */
+    struct ovs_list waiters OVS_GUARDED;
+                                /* Contains "struct ovsdb_lock_waiter"s. */
 };
 
 struct ovsdb_lock_waiter *ovsdb_lock_get_owner(const struct ovsdb_lock *);
@@ -61,7 +62,7 @@ enum ovsdb_lock_mode {
 /* A session's request for a database lock. */
 struct ovsdb_lock_waiter {
     struct hmap_node session_node; /* In ->session->locks's hmap. */
-    struct ovsdb_lock *lock;    /* The lock being waited for. */
+    struct ovsdb_lock *lock;       /* The lock being waited for. */
 
     enum ovsdb_lock_mode mode;
     char *lock_name;

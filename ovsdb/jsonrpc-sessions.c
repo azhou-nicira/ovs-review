@@ -315,8 +315,16 @@ ovsdb_jsonrpc_session_notify(struct ovsdb_session *session,
     struct json *params;
 
     s = CONTAINER_OF(session, struct ovsdb_jsonrpc_session, up);
-    params = json_array_create_1(json_string_create(lock_name));
-    ovsdb_jsonrpc_session_send(s, jsonrpc_create_notify(method, params));
+    if (ovsdb_jsonrpc_session_handled_locally(s)) {
+        params = json_array_create_1(json_string_create(lock_name));
+        ovsdb_jsonrpc_session_send(s, jsonrpc_create_notify(method, params));
+    } else {
+        struct ovsdb_ipc_lock_notify *ipc;
+
+        ipc = ovsdb_ipc_lock_notify_create(session, lock_name, method);
+        ipc = NULL;
+        ovsdb_ipc_sendto(session->handler, ipc);
+    }
 }
 
 static struct jsonrpc_msg *
@@ -380,7 +388,14 @@ ovsdb_jsonrpc_session_unlock__(struct ovsdb_lock_waiter *waiter)
     struct ovsdb_lock *lock = waiter->lock;
 
     if (lock) {
-        struct ovsdb_session *new_owner = ovsdb_lock_waiter_remove(waiter);
+        struct ovsdb_jsonrpc_server *svr;
+        struct ovsdb_session *new_owner;
+
+        svr = CONTAINER_OF(lock->server, struct ovsdb_jsonrpc_server, up);
+
+        ovsdb_jsonrpc_server_lock(svr);
+        new_owner = ovsdb_lock_waiter_remove(waiter);
+        ovsdb_jsonrpc_server_unlock(svr);
         if (new_owner) {
             ovsdb_jsonrpc_session_notify(new_owner, lock->name, "locked");
         } else {

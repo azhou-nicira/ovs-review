@@ -374,6 +374,66 @@ ovsdb_jsonrpc_server_del_remote(struct ovsdb_jsonrpc_server *svr,
     ovsdb_jsonrpc_remote_unref(remote);
 }
 
+struct ovsdb_ipc_lock_notify {
+    struct ovsdb_ipc up;
+    struct ovsdb_jsonrpc_session *session;
+    char *lock_name;
+    char *method;
+};
+
+struct ovsdb_ipc *
+ovsdb_ipc_lock_notify_create(struct ovsdb_jsonrpc_session *session,
+                             char *lock_name, char *method)
+{
+    struct ovsdb_ipc_lock_notify *ipc = xmalloc(sizeof *ipc);
+
+    ovsdb_ipc_init(&ipc->up, OVSDB_IPC_LOCK_NOTIFY, sizeof *ipc);
+    ipc->session = session;
+    ipc->lock_name = xstrdup(lock_name);
+    ipc->method = xstrdup(method);
+
+    return &ipc->up;
+}
+
+static void
+handle_LOCK_NOTIFY(struct sessions_handler *handler, struct ovsdb_ipc *ipc)
+{
+    struct ovsdb_ipc_lock_notify *ipc;
+    struct ovsdb_jsonrpc_session *s;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_lock_notify, up);
+
+    LIST_FOR_EACH (s, s->node, handler->sessions) {
+        /* Only handle lock notification if the session is still alive
+         * within the handler. If the session has been deleted, send
+         * notification to the next waiter. */
+        if (s == ipc->session) {
+
+
+        }
+    }
+    
+
+}
+
+static void
+dtor_LOCK_NOTIFY(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_lock_notify *ipc;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_lock_notify, up);
+    ovsdb_jsonrpc_session_ref(ipc->session);
+}
+
+static ovsdb_ipc *
+clone_LOCK_NOTIFY(struct ovsdb_ipc *ipc)
+{
+    ipc = CONTAINER_OF(ovsdb_ipc_dup(ipc_), struct ovsdb_ipc_lock_notify, up);
+    ovsdb_jsonrpc_session_unref(ipc->session);
+
+    return &ipc->up;
+}
+
 /* Stores status information for the remote named 'target', which should have
  * been configured on 'svr' with a call to ovsdb_jsonrpc_server_set_remotes(),
  * into '*status'.  On success returns true, on failure (if 'svr' doesn't have
