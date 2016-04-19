@@ -46,6 +46,11 @@ struct ovsdb_jsonrpc_monitor;
 void ovsdb_jsonrpc_monitor_destroy(struct ovsdb_jsonrpc_monitor *);
 void ovsdb_jsonrpc_disable_monitor2(void);
 
+/* Lock. */
+void ovsdb_jsonrpc_sessions_lock_notify(struct ovs_list *sessions,
+                                        struct ovsdb_jsonrpc_session *session,
+                                        const char *lock_name);
+
 /* Session. */
 void ovsdb_jsonrpc_session_get_status(
     const struct ovsdb_jsonrpc_session *session,
