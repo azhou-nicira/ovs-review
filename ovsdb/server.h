@@ -18,6 +18,7 @@
 
 #include "hmap.h"
 #include "openvswitch/list.h"
+#include "openvswitch/thread.h"
 #include "shash.h"
 
 struct ovsdb;
@@ -77,13 +78,20 @@ bool ovsdb_lock_waiter_is_owner(const struct ovsdb_lock_waiter *);
  * network protocol.  Protocol implementations (e.g. jsonrpc-server.c) embed
  * this in a larger data structure.  */
 struct ovsdb_server {
-    struct shash dbs;      /* Maps from a db name to a "struct ovsdb *". */
-    struct hmap locks;     /* Contains "struct ovsdb_lock"s indexed by name. */
+    struct ovs_mutex mutex;
+    struct shash dbs OVS_GUARDED;      /* Maps from a db name to a
+                                          "struct ovsdb *". Access protected
+                                          by 'mutex'. */
+    struct hmap locks OVS_GUARDED;     /* Contains "struct ovsdb_lock"s
+                                          indexed by name. Access protected
+                                          by 'mutex'. */
 };
 
 void ovsdb_server_init(struct ovsdb_server *);
-bool ovsdb_server_add_db(struct ovsdb_server *, struct ovsdb *);
-bool ovsdb_server_remove_db(struct ovsdb_server *, struct ovsdb *);
+bool ovsdb_server_add_db(struct ovsdb_server *server, struct ovsdb *)
+    OVS_EXCLUDED(server->mutex);
+bool ovsdb_server_remove_db(struct ovsdb_server *server, struct ovsdb *)
+    OVS_EXCLUDED(server->mutex);
 void ovsdb_server_destroy(struct ovsdb_server *);
 
 struct ovsdb_lock_waiter *ovsdb_server_lock(struct ovsdb_server *,

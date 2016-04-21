@@ -222,6 +222,25 @@ ovsdb_jsonrpc_session_get_status(const struct ovsdb_jsonrpc_session *session,
     status->locks_lost = ds_steal_cstr(&locks_lost);
 }
 
+/* Lookup db using locking. This function can be called
+ * from any thread. If a 'db' is found, it is reference counted
+ * so that both 'db' and 'db->schema' are safe to access
+ * by the same thread that did the look up.
+ *
+ * The caller is responsible for calling ovsdb_unref() when disposing
+ * the returned pointer.  */
+static struct ovsdb *
+lookup_db__(const struct ovsdb_jsonrpc_session *s, const char *db_name)
+{
+    struct ovsdb *db;
+
+    ovsdb_jsonrpc_server_lock(s->server);
+    db = ovsdb_ref(shash_find_data(&s->up.server->dbs, db_name));
+    ovsdb_jsonrpc_server_unlock(s->server);
+
+    return db;
+}
+
 /* Examines 'request' to determine the database to which it relates, and then
  * searches 's' to find that database:
  *
@@ -248,7 +267,7 @@ ovsdb_jsonrpc_lookup_db(const struct ovsdb_jsonrpc_session *s,
     }
 
     db_name = params->elems[0]->u.string;
-    db = shash_find_data(&s->up.server->dbs, db_name);
+    db = lookup_db__(s, db_name);
     if (!db) {
         error = ovsdb_syntax_error(
             request->params, "unknown database",
@@ -425,6 +444,7 @@ ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *s,
         if (!reply) {
             reply = execute_transaction(s, db, request);
         }
+        ovsdb_unref(db);
     } else if (!strcmp(request->method, "monitor") ||
                (monitor2_enable__ && !strcmp(request->method, "monitor2"))) {
         struct ovsdb *db = ovsdb_jsonrpc_lookup_db(s, request, &reply);
@@ -435,6 +455,7 @@ ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *s,
             reply = ovsdb_jsonrpc_monitor_create(s, db, request->params,
                                                  version, request->id);
         }
+        ovsdb_unref(db);
     } else if (!strcmp(request->method, "monitor_cancel")) {
         reply = ovsdb_jsonrpc_monitor_cancel(s, json_array(request->params),
                                              request->id);
@@ -444,17 +465,21 @@ ovsdb_jsonrpc_session_got_request(struct ovsdb_jsonrpc_session *s,
             reply = jsonrpc_create_reply(ovsdb_schema_to_json(db->schema),
                                          request->id);
         }
+        ovsdb_unref(db);
     } else if (!strcmp(request->method, "list_dbs")) {
-        size_t n_dbs = shash_count(&s->up.server->dbs);
+        size_t n_dbs;
         struct shash_node *node;
         struct json **dbs;
         size_t i;
 
+        ovsdb_jsonrpc_server_lock(s->server);
+        n_dbs = shash_count(&s->up.server->dbs);
         dbs = xmalloc(n_dbs * sizeof *dbs);
         i = 0;
         SHASH_FOR_EACH (node, &s->up.server->dbs) {
             dbs[i++] = json_string_create(node->name);
         }
+        ovsdb_jsonrpc_server_unlock(s->server);
         reply = jsonrpc_create_reply(json_array_create(dbs, n_dbs),
                                      request->id);
     } else if (!strcmp(request->method, "lock")) {

@@ -19,6 +19,7 @@
 #include "compiler.h"
 #include "hmap.h"
 #include "openvswitch/list.h"
+#include "ovs-atomic.h"
 #include "shash.h"
 
 struct json;
@@ -62,6 +63,10 @@ struct ovsdb {
     /* Triggers. */
     struct ovs_list triggers;   /* Contains "struct ovsdb_trigger"s. */
     bool run_triggers;
+
+    /* Multi-threading.  */
+    struct ovs_refcount refcount; /* Reference counter ensures both the
+                                     object and 'schema' is valid. */
 };
 
 struct ovsdb *ovsdb_create(struct ovsdb_schema *);
@@ -94,5 +99,8 @@ void ovsdb_replica_init(struct ovsdb_replica *,
 
 void ovsdb_add_replica(struct ovsdb *, struct ovsdb_replica *);
 void ovsdb_remove_replica(struct ovsdb *, struct ovsdb_replica *);
+
+struct ovsdb *ovsdb_ref(const struct ovsdb *);
+void ovsdb_unref(const struct ovsdb *);
 
 #endif /* ovsdb/ovsdb.h */
