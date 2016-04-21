@@ -424,3 +424,18 @@ main_handler_sessions(const struct ovsdb_jsonrpc_server *svr)
 {
     return &main_handler(svr)->all_sessions;
 }
+
+
+void
+ovsdb_jsonrpc_server_lock(struct ovsdb_jsonrpc_server *svr)
+    OVS_ACQUIRES(svr->up.mutex)
+{
+    ovs_mutex_lock(&svr->up.mutex);
+}
+
+void
+ovsdb_jsonrpc_server_unlock(struct ovsdb_jsonrpc_server *svr)
+    OVS_RELEASES(svr->up.mutex)
+{
+    ovs_mutex_unlock(&svr->up.mutex);
+}

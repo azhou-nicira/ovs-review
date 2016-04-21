@@ -119,6 +119,7 @@ ovsdb_lock_waiter_is_owner(const struct ovsdb_lock_waiter *waiter)
 void
 ovsdb_server_init(struct ovsdb_server *server)
 {
+    ovs_mutex_init(&server->mutex);
     shash_init(&server->dbs);
     hmap_init(&server->locks);
 }
@@ -128,8 +129,15 @@ ovsdb_server_init(struct ovsdb_server *server)
  * 'server'. */
 bool
 ovsdb_server_add_db(struct ovsdb_server *server, struct ovsdb *db)
+    OVS_EXCLUDED(server->mutex)
 {
-    return shash_add_once(&server->dbs, db->schema->name, db);
+    bool rv;
+
+    ovs_mutex_lock(&server->mutex);
+    rv = shash_add_once(&server->dbs, db->schema->name, db);
+    ovs_mutex_unlock(&server->mutex);
+
+    return rv;
 }
 
 /* Removes 'db' from the set of databases served out by 'server'.  Returns
@@ -137,8 +145,14 @@ ovsdb_server_add_db(struct ovsdb_server *server, struct ovsdb *db)
  * db->schema->name. */
 bool
 ovsdb_server_remove_db(struct ovsdb_server *server, struct ovsdb *db)
+    OVS_EXCLUDED(server->mutex)
 {
-    void *data = shash_find_and_delete(&server->dbs, db->schema->name);
+    void *data;
+
+    ovs_mutex_lock(&server->mutex);
+    data = shash_find_and_delete(&server->dbs, db->schema->name);
+    ovs_mutex_unlock(&server->mutex);
+
     if (data) {
         return true;
     }
@@ -156,19 +170,27 @@ ovsdb_server_destroy(struct ovsdb_server *server)
 static struct ovsdb_lock *
 ovsdb_server_create_lock__(struct ovsdb_server *server, const char *lock_name,
                            uint32_t hash)
+    OVS_EXCLUDED(server->mutex)
 {
     struct ovsdb_lock *lock;
 
+    ovs_mutex_lock(&server->mutex);
     HMAP_FOR_EACH_WITH_HASH (lock, hmap_node, hash, &server->locks) {
         if (!strcmp(lock->name, lock_name)) {
+            ovs_mutex_unlock(&server->mutex);
             return lock;
         }
     }
+    ovs_mutex_unlock(&server->mutex);
 
     lock = xzalloc(sizeof *lock);
     lock->server = server;
     lock->name = xstrdup(lock_name);
+
+    ovs_mutex_lock(&server->mutex);
     hmap_insert(&server->locks, &lock->hmap_node, hash);
+    ovs_mutex_unlock(&server->mutex);
+
     ovs_list_init(&lock->waiters);
 
     return lock;

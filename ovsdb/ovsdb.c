@@ -351,6 +351,7 @@ ovsdb_create(struct ovsdb_schema *schema)
         }
     }
 
+    ovs_refcount_init(&db->refcount);
     return db;
 }
 
@@ -380,8 +381,7 @@ ovsdb_destroy(struct ovsdb *db)
          * destroy the table, because ovsdb_schema_destroy() will do that. */
         shash_clear(&db->schema->tables);
 
-        ovsdb_schema_destroy(db->schema);
-        free(db);
+        ovsdb_unref(db);
     }
 }
 
@@ -428,4 +428,25 @@ ovsdb_remove_replica(struct ovsdb *db OVS_UNUSED, struct ovsdb_replica *r)
 {
     ovs_list_remove(&r->node);
     (r->class->destroy)(r);
+}
+
+struct ovsdb *
+ovsdb_ref(const struct ovsdb *ovsdb_)
+{
+    struct ovsdb *ovsdb = CONST_CAST(struct ovsdb *, ovsdb_);
+    if (ovsdb) {
+        ovs_refcount_ref(&ovsdb->refcount);
+    }
+    return ovsdb;
+}
+
+void
+ovsdb_unref(const struct ovsdb *ovsdb_)
+{
+    struct ovsdb *ovsdb = CONST_CAST(struct ovsdb *, ovsdb_);
+
+    if (ovsdb && ovs_refcount_unref(&ovsdb->refcount) == 1) {
+        ovsdb_schema_destroy(ovsdb->schema);
+        free(ovsdb);
+    }
 }
