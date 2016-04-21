@@ -18,6 +18,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "openvswitch/thread.h"
 #include "openvswitch/types.h"
 #include "ovs-atomic.h"
 #include "ovs-thread.h"
@@ -77,6 +78,10 @@ bool ovsdb_jsonrpc_server_add_db(struct ovsdb_jsonrpc_server *,
 bool ovsdb_jsonrpc_server_remove_db(struct ovsdb_jsonrpc_server *,
                                      struct ovsdb *);
 void ovsdb_jsonrpc_server_destroy(struct ovsdb_jsonrpc_server *);
+void ovsdb_jsonrpc_server_lock(struct ovsdb_jsonrpc_server *svr)
+    OVS_ACQUIRES(svr->up.mutex);
+void ovsdb_jsonrpc_server_unlock(struct ovsdb_jsonrpc_server *svr)
+    OVS_RELEASES(svr->up.mutex);
 
 /* Options for a remote. */
 struct ovsdb_jsonrpc_options {
@@ -102,6 +107,10 @@ struct ovsdb_jsonrpc_remote_status {
     char *locks_lost;
     int n_connections;
     ovs_be16 bound_port;
+
+    /* Data base server global lock, protects access to
+     * 'ovsdb_lock' */
+    struct ovs_mutex mutex;
 };
 
 bool ovsdb_jsonrpc_server_get_remote_status(
