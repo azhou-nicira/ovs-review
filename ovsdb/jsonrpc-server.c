@@ -46,6 +46,8 @@
 
 VLOG_DEFINE_THIS_MODULE(ovsdb_jsonrpc_server);
 
+DEFINE_EXTERN_PER_THREAD_DATA(per_thread_handler, NULL);
+
 struct ovsdb_jsonrpc_remote;
 struct ovsdb_jsonrpc_session;
 
@@ -367,6 +369,7 @@ sessions_handler_main(void * h_)
 {
     struct sessions_handler *handler = h_;
 
+    *per_thread_handler_get() = handler;
     VLOG_DBG("sessions handler thread created");
     while (!latch_is_set(&handler->exit_latch)) {
         latch_wait(&handler->exit_latch);
@@ -386,6 +389,8 @@ sessions_handler_init(struct sessions_handler *handler, bool use_pthread)
         handler->thread = ovs_thread_create("sessions_handler",
                                             sessions_handler_main, handler);
         latch_init(&handler->exit_latch);
+    } else {
+        *per_thread_handler_get() = handler;
     }
 }
 

@@ -19,6 +19,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "openvswitch/types.h"
+#include "ovs-thread.h"
 #include "server.h"
 
 struct ovsdb;
@@ -28,6 +29,17 @@ struct stream;
 struct ovs_list;
 struct ovsdb_jsonrpc_remote;
 struct sessions_handler;
+
+DECLARE_EXTERN_PER_THREAD_DATA(struct sessions_handler *, per_thread_handler);
+
+/* Return a per-thread sessions_handler pointer. This value is assigned once
+ * when a thread is craeted, and never changes within the lifetime of the
+ * process.  */
+static inline struct sessions_handler *
+ovsdb_per_thread_sessions_handler(void)
+{
+    return *per_thread_handler_get();
+}
 
 /* JSON-RPC database server. */
 struct ovsdb_jsonrpc_server {
