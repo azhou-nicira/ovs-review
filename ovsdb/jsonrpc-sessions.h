@@ -55,4 +55,6 @@ struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_session_create(
     struct ovsdb_jsonrpc_server *server, struct jsonrpc_session *js,
     struct ovsdb_jsonrpc_remote *remote, struct ovs_list *sessions);
 
+bool ovsdb_jsonrpc_session_handled_locally(struct ovsdb_jsonrpc_session *s);
+
 #endif /* ovsdb/jsonrpc-session.h */
