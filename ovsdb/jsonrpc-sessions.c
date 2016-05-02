@@ -40,6 +40,8 @@
 #include "transaction.h"
 #include "trigger.h"
 
+struct sessions_handler;
+
 VLOG_DEFINE_THIS_MODULE(ovsdb_jsonrpc_sessions);
 
 struct ovsdb_jsonrpc_session {
@@ -64,6 +66,7 @@ struct ovsdb_jsonrpc_session {
                                This thread has exclusive access to the
                                session. Other thread may use pointer to
                                this session as opaue pointer. */
+    struct sessions_handler *handler;
 };
 
 /* Sessions. */
@@ -525,6 +528,7 @@ ovsdb_jsonrpc_session_create(struct ovsdb_jsonrpc_server *server,
     ovs_refcount_init(&s->refcount);
     ovsdb_jsonrpc_sessions_add(sessions, s);
     s->thread_id = ovsthread_id_self();
+    s->handler = *per_thread_handler_get();
 
     /* Let server know about session membership change.  */
     server->n_sessions++;
@@ -1124,4 +1128,10 @@ ovsdb_jsonrpc_sessions_add(struct ovs_list *sessions,
                            struct ovsdb_jsonrpc_session *s)
 {
     ovs_list_push_back(sessions, &s->node);
+}
+
+bool
+ovsdb_jsonrpc_session_handled_locally(struct ovsdb_jsonrpc_session *s)
+{
+    return s->handler == *per_thread_handler_get();
 }
