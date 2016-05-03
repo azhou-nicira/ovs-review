@@ -391,11 +391,24 @@ ovsdb_jsonrpc_session_unlock__(struct ovsdb_lock_waiter *waiter)
     ovsdb_lock_waiter_destroy(waiter);
 }
 
+bool
+ovsdb_jsonrpc_lock_unlock(struct ovsdb_jsonrpc_session *s,
+                          const char *lock_name)
+{
+    struct ovsdb_lock_waiter *waiter;
+
+    waiter = ovsdb_session_get_lock_waiter(&s->up, lock_name);
+    if (waiter) {
+        ovsdb_jsonrpc_session_unlock__(waiter);
+    }
+
+    return waiter ? true : false;
+}
+
 static struct jsonrpc_msg *
 ovsdb_jsonrpc_session_unlock(struct ovsdb_jsonrpc_session *s,
                              struct jsonrpc_msg *request)
 {
-    struct ovsdb_lock_waiter *waiter;
     struct jsonrpc_msg *reply;
     struct ovsdb_error *error;
     const char *lock_name;
@@ -407,14 +420,11 @@ ovsdb_jsonrpc_session_unlock(struct ovsdb_jsonrpc_session *s,
 
     /* Report error if this session has not issued a "lock" or "steal" for this
      * lock. */
-    waiter = ovsdb_session_get_lock_waiter(&s->up, lock_name);
-    if (!waiter) {
+    if (!ovsdb_jsonrpc_lock_unlock(s, lock_name)) {
         error = ovsdb_syntax_error(
             request->params, NULL, "\"unlock\" without \"lock\" or \"steal\"");
         goto error;
     }
-
-    ovsdb_jsonrpc_session_unlock__(waiter);
 
     return jsonrpc_create_reply(json_object_create(), request->id);
 

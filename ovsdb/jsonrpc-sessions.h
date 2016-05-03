@@ -61,4 +61,7 @@ struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_session_ref(
     const struct ovsdb_jsonrpc_session *session);
 void ovsdb_jsonrpc_session_unref(const struct ovsdb_jsonrpc_session *session);
 
+/* Lock */
+bool ovsdb_jsonrpc_lock_unlock(struct ovsdb_jsonrpc_session *s,
+                               const char *lock_name);
 #endif /* ovsdb/jsonrpc-session.h */
