@@ -307,11 +307,11 @@ ovsdb_jsonrpc_session_parse_lock_name(const struct jsonrpc_msg *request,
 }
 
 static void
-ovsdb_jsonrpc_session_notify(struct ovsdb_session *session,
+ovsdb_jsonrpc_session_notify(struct ovsdb_lock_waiter *waiter,
                              const char *lock_name,
                              const char *method)
 {
-    struct ovsdb_jsonrpc_session *s;
+    struct ovsdb_jsonrpc_session *s = waiter->session;
     struct json *params;
 
     s = CONTAINER_OF(session, struct ovsdb_jsonrpc_session, up);
@@ -381,6 +381,7 @@ ovsdb_jsonrpc_session_unlock__(struct ovsdb_lock_waiter *waiter)
 
     if (lock) {
         struct ovsdb_session *new_owner = ovsdb_lock_waiter_remove(waiter);
+
         if (new_owner) {
             ovsdb_jsonrpc_session_notify(new_owner, lock->name, "locked");
         } else {
