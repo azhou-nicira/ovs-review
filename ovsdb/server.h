@@ -47,7 +47,10 @@ struct ovsdb_lock {
     struct hmap_node hmap_node;  /* In ovsdb_server's "locks" hmap. */
     struct ovsdb_server *server; /* The containing server. */
     char *name;                  /* Unique name. */
-    struct ovs_list waiters;     /* Contains "struct ovsdb_lock_waiter"s. */
+
+    struct ovs_mutex mutex;      /* Protects 'waiters' */
+    struct ovs_list waiters OVS_GUARDED;
+                                /* Contains "struct ovsdb_lock_waiter"s. */
 };
 
 struct ovsdb_lock_waiter *ovsdb_lock_get_owner(const struct ovsdb_lock *);

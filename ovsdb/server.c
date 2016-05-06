@@ -59,6 +59,7 @@ ovsdb_session_get_lock_waiter(const struct ovsdb_session *session,
  * A lock always has an owner, so this function will never return NULL. */
 struct ovsdb_lock_waiter *
 ovsdb_lock_get_owner(const struct ovsdb_lock *lock)
+    OVS_REQUIRES(lock->mutex)
 {
     return CONTAINER_OF(ovs_list_front(&lock->waiters),
                         struct ovsdb_lock_waiter, lock_node);
@@ -67,27 +68,32 @@ ovsdb_lock_get_owner(const struct ovsdb_lock *lock)
 /* Removes 'waiter' from its lock's list.  This means that, if 'waiter' was
  * formerly the owner of its lock, then it no longer owns it.
  *
- * Returns the session that now owns 'waiter'.  This is NULL if 'waiter' was
- * the lock's owner and no other sessions were waiting for the lock.  In this
- * case, the lock has been destroyed, so the caller must be sure not to refer
- * to it again.  A nonnull return value reflects a change in the lock's
- * ownership if and only if 'waiter' formerly owned the lock. */
-struct ovsdb_session *
+ * Returns the next 'waiter' that now owns lock.  This is NULL if 'waiter'
+ * was the lock's owner and no other sessions were waiting for the lock.
+ * In this case, the lock has been destroyed, so the caller must be sure not
+ * to refer to it again.  A nonnull return value reflects a change in the
+ * lock's ownership if and only if 'waiter' formerly owned the lock. */
+struct ovsdb_lock_waiter *
 ovsdb_lock_waiter_remove(struct ovsdb_lock_waiter *waiter)
+    OVS_REQUIRES(watier->lock->mutex)
 {
     struct ovsdb_lock *lock = waiter->lock;
+    struct ovsdb_lock_waiter *next_owner;
 
     ovs_list_remove(&waiter->lock_node);
+    bool empty_lock = ovs_list_is_empty(&lock->waiters);
     waiter->lock = NULL;
 
     if (ovs_list_is_empty(&lock->waiters)) {
+        ovs_mutex_lock(&server->mutex);
         hmap_remove(&lock->server->locks, &lock->hmap_node);
+        ovs_mutex_unlock(&server->mutex);
         free(lock->name);
         free(lock);
         return NULL;
     }
 
-    return ovsdb_lock_get_owner(lock)->session;
+    return ovsdb_lock_get_owner(lock);
 }
 
 /* Destroys 'waiter', which must have already been removed from its lock's
@@ -108,8 +114,18 @@ ovsdb_lock_waiter_destroy(struct ovsdb_lock_waiter *waiter)
 /* Returns true if 'waiter' owns its associated lock. */
 bool
 ovsdb_lock_waiter_is_owner(const struct ovsdb_lock_waiter *waiter)
+    OVS_EXCLUDED(waiter->lock->mutex)
 {
-    return waiter->lock && waiter == ovsdb_lock_get_owner(waiter->lock);
+    struct ovsdb_lock *lock = waiter->lock;
+
+    if (lock) {
+        ovs_mutex_lock(&lock->mutex);
+        bool is_owner = waiter == ovsdb_lock_get_owner(waiter->lock);
+        ovs_mutex_unlock(&lock->mutex);
+        return is_owner;
+    }
+
+    return false;
 }
 
 /* Initializes 'server'.
@@ -170,7 +186,7 @@ ovsdb_server_destroy(struct ovsdb_server *server)
 static struct ovsdb_lock *
 ovsdb_server_create_lock__(struct ovsdb_server *server, const char *lock_name,
                            uint32_t hash)
-    OVS_EXCLUDED(server->mutex)
+      OVS_REQUIRES(server->mutex)
 {
     struct ovsdb_lock *lock;
 
@@ -181,15 +197,13 @@ ovsdb_server_create_lock__(struct ovsdb_server *server, const char *lock_name,
             return lock;
         }
     }
-    ovs_mutex_unlock(&server->mutex);
 
     lock = xzalloc(sizeof *lock);
     lock->server = server;
     lock->name = xstrdup(lock_name);
+    ovs_mutext_init(lock->mutex);
 
-    ovs_mutex_lock(&server->mutex);
     hmap_insert(&server->locks, &lock->hmap_node, hash);
-    ovs_mutex_unlock(&server->mutex);
 
     ovs_list_init(&lock->waiters);
 
@@ -218,7 +232,11 @@ ovsdb_server_lock(struct ovsdb_server *server,
     struct ovsdb_lock_waiter *waiter, *victim;
     struct ovsdb_lock *lock;
 
+    ovs_mutex_lock(&server->mutex);
     lock = ovsdb_server_create_lock__(server, lock_name, hash);
+    ovs_mutex_lock(&lock->mutex);
+    ovs_mutex_unlock(&server->mutex);
+
     victim = (mode == OVSDB_LOCK_STEAL && !ovs_list_is_empty(&lock->waiters)
               ? ovsdb_lock_get_owner(lock)
               : NULL);
@@ -232,12 +250,15 @@ ovsdb_server_lock(struct ovsdb_server *server,
     } else {
         ovs_list_push_back(&lock->waiters, &waiter->lock_node);
     }
+
     waiter->session = session;
     hmap_insert(&waiter->session->waiters, &waiter->session_node, hash);
 
     if (victim && victim->mode == OVSDB_LOCK_STEAL) {
         ovsdb_lock_waiter_remove(victim);
     }
+    ovs_mutex_unlock(&lock->mutex);
+
     *victimp = victim ? victim->session : NULL;
 
     return waiter;
