@@ -35,17 +35,21 @@ struct ovsdb_trigger {
 
 };
 
+/* Functions used by sessions thread. */
 void ovsdb_trigger_init(struct ovsdb_session *, struct ovsdb *,
                         struct ovsdb_trigger *,
                         struct json *request, long long int now);
-void ovsdb_trigger_destroy(struct ovsdb_trigger *);
-
 bool ovsdb_trigger_is_complete(const struct ovsdb_trigger *);
 struct json *ovsdb_trigger_steal_result(struct ovsdb_trigger *);
 
-void ovsdb_trigger_run(struct ovsdb *, long long int now);
-void ovsdb_trigger_wait(struct ovsdb *, long long int now);
+/* Functions unsed only by ovsdb_server */
+void ovsdb_trigger_server_add(struct ovsdb_trigger *);
+void ovsdb_trigger_server_remove(struct ovsdb_trigger *);
+void ovsdb_trigger_server_run(struct ovsdb *, long long int now,
+                              struct ovs_list *);
+void ovsdb_trigger_server_wait(struct ovsdb *, long long int now);
 
+/* Common functions */
 struct ovsdb_trigger *ovsdb_trigger_ref(const struct ovsdb_trigger *);
 void ovsdb_trigger_unref(const struct ovsdb_trigger *);
 

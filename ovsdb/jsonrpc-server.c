@@ -72,7 +72,6 @@ static void sessions_handler_init(struct sessions_handler *, unsigned int);
 static void sessions_handler_destroy(struct sessions_handler *);
 static void sessions_handler_ipc_run(struct sessions_handler *);
 static void sessions_handler_ipc_wait(struct sessions_handler *);
-
 static struct ovs_list *handler_sessions(struct sessions_handler *handler);
 static struct sessions_handler *main_handler(struct ovsdb_jsonrpc_server *);
 static struct ovs_list *main_handler_sessions(struct ovsdb_jsonrpc_server *);
@@ -1014,6 +1013,107 @@ clone_SYNC(struct ovsdb_ipc *ipc_)
     return ovsdb_ipc_dup(ipc_);
 }
 
+struct ovsdb_ipc_trigger {
+    struct ovsdb_ipc up;
+    enum ovsdb_ipc_trigger_subtype subtype;
+    struct ovsdb_trigger *trigger;
+};
+
+static struct ovsdb_ipc *
+ovsdb_ipc_trigger_create(enum ovsdb_ipc_trigger_subtype subtype,
+                         struct ovsdb_trigger *trigger)
+{
+    struct ovsdb_ipc_trigger *ipc;
+
+    ipc = xmalloc(sizeof *ipc);
+    ovsdb_ipc_init(&ipc->up, OVSDB_IPC_TRIGGER, sizeof *ipc);
+
+    ipc->subtype = subtype;
+    ipc->trigger = ovsdb_trigger_ref(trigger);
+
+    return &ipc->up;
+}
+
+static void
+handle_TRIGGER(struct sessions_handler *handler, struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_trigger *ipc;
+    struct ovsdb_trigger *trigger;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_trigger, up);
+    trigger = ipc->trigger;
+
+    switch(ipc->subtype) {
+    case OVSDB_IPC_TRIGGER_ADD:
+        ovsdb_trigger_server_add(trigger);
+        break;
+    case OVSDB_IPC_TRIGGER_REMOVE:
+        ovsdb_trigger_server_remove(trigger);
+        break;
+    case OVSDB_IPC_TRIGGER_COMPLETED:
+        ovsdb_jsonrpc_sessions_trigger_complete(handler_sessions(handler),
+                                                trigger);
+        break;
+    }
+}
+
+static void
+dtor_TRIGGER(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_trigger *ipc;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_trigger, up);
+    ovsdb_trigger_unref(ipc->trigger);
+    free(ipc_);
+}
+
+static struct ovsdb_ipc *
+clone_TRIGGER(struct ovsdb_ipc *ipc_ OVS_UNUSED)
+{
+    VLOG_FATAL("unexpected cloning trigger IPC message");
+}
+
+void
+ovsdb_jsonrpc_server_trigger_completed(struct ovs_list *completed)
+{
+    struct ovsdb_trigger *trigger, *next;
+    struct ovsdb_ipc *ipc;
+
+    LIST_FOR_EACH_SAFE (trigger, next, node, completed) {
+        struct sessions_handler *h;
+
+        ovs_list_init(&trigger->node);
+        ipc = ovsdb_ipc_trigger_create(OVSDB_IPC_TRIGGER_COMPLETED,
+                                       trigger);
+        h = ovsdb_jsonrpc_session_handler(trigger->session);
+        ovsdb_ipc_sendto(h, ipc);
+    }
+}
+
+static void
+send_trigger_ipc(struct ovsdb_jsonrpc_server *svr,
+                 struct ovsdb_trigger *trigger,
+                 enum ovsdb_ipc_trigger_subtype subtype)
+{
+    struct ovsdb_ipc *ipc;
+    ipc = ovsdb_ipc_trigger_create(subtype, trigger);
+    ovsdb_ipc_sendto(main_handler(svr), ipc);
+}
+
+void
+ovsdb_jsonrpc_server_add_trigger(struct ovsdb_jsonrpc_server *svr,
+                                 struct ovsdb_trigger *trigger)
+{
+    send_trigger_ipc(svr, trigger, OVSDB_IPC_TRIGGER_ADD);
+}
+
+void
+ovsdb_jsonrpc_server_remove_trigger(struct ovsdb_jsonrpc_server *svr,
+                                    struct ovsdb_trigger *trigger)
+{
+    send_trigger_ipc(svr, trigger, OVSDB_IPC_TRIGGER_REMOVE);
+}
+
 /* Sync all handlers before execute 'exec'.
  *
  * This is a helper function for using OVSDB_IPC_SYNC.
@@ -1068,16 +1168,54 @@ ovsdb_ipc_msg_type_to_string(enum ovsdb_ipc_type ipc_type)
         return "set_options";
     case OVSDB_IPC_LOCK_NOTIFY:
         return "lock";
+    case OVSDB_IPC_TRIGGER:
+        return "trigger";
     case OVSDB_IPC_N_MESSAGES:
     default:
         ovs_fatal(0, "Not a valid IPC message");
     }
 }
 
+static const char *
+ovsdb_ipc_trigger_subtype_to_string(enum ovsdb_ipc_trigger_subtype subtype)
+{
+    switch (subtype) {
+    case OVSDB_IPC_TRIGGER_ADD:
+        return "add";
+    case OVSDB_IPC_TRIGGER_REMOVE:
+        return "remove";
+    case OVSDB_IPC_TRIGGER_COMPLETED:
+        return "completed";
+    };
+
+    return NULL;
+}
+
 static void
 ovsdb_ipc_to_ds(struct ovsdb_ipc *ipc, struct ds *ds)
 {
     ds_put_cstr(ds, ovsdb_ipc_msg_type_to_string(ipc->message));
+
+    switch(ipc->message) {
+    case OVSDB_IPC_TRIGGER:
+        {
+            struct ovsdb_ipc_trigger *trigger_ipc;
+            const char *s;
+            trigger_ipc = CONTAINER_OF(ipc, struct ovsdb_ipc_trigger, up);
+            s = ovsdb_ipc_trigger_subtype_to_string(trigger_ipc->subtype);
+            ds_put_format(ds, "[%s]", s);
+        }
+        break;
+    case OVSDB_IPC_SYNC:
+    case OVSDB_IPC_NEW_SESSION:
+    case OVSDB_IPC_CLOSE_SESSIONS:
+    case OVSDB_IPC_RECONNECT:
+    case OVSDB_IPC_SET_OPTIONS:
+    case OVSDB_IPC_LOCK_NOTIFY:
+    case OVSDB_IPC_N_MESSAGES:
+    default:
+        break;
+    }
 }
 
 static char *

@@ -1371,8 +1371,7 @@ do_trigger_dump(struct test_trigger *t, long long int now, const char *title)
     printf("t=%lld: trigger %d (%s): %s\n", now, t->number, title, s);
     free(s);
     json_destroy(result);
-    ovsdb_trigger_destroy(&t->trigger);
-    ovsdb_trigger_unref(&t->trigger);
+    ovsdb_trigger_server_remove(&t->trigger);
 }
 
 static void
@@ -1384,6 +1383,7 @@ do_trigger(struct ovs_cmdl_context *ctx)
     struct json *json;
     struct ovsdb *db;
     long long int now;
+    struct ovs_list completed;
     int number;
     int i;
 
@@ -1411,6 +1411,9 @@ do_trigger(struct ovs_cmdl_context *ctx)
         } else {
             struct test_trigger *t = xmalloc(sizeof *t);
             ovsdb_trigger_init(&session, db, &t->trigger, params, now);
+            ovsdb_trigger_server_add(&t->trigger);
+            ovs_list_init(&completed);
+            ovsdb_trigger_server_run(db, now, &completed);
             t->number = number++;
             if (ovsdb_trigger_is_complete(&t->trigger)) {
                 do_trigger_dump(t, now, "immediate");
@@ -1419,14 +1422,15 @@ do_trigger(struct ovs_cmdl_context *ctx)
             }
         }
 
-        ovsdb_trigger_run(db, now);
-        while (!ovs_list_is_empty(&session.completions)) {
-            do_trigger_dump(CONTAINER_OF(ovs_list_pop_front(&session.completions),
+        ovs_list_init(&completed);
+        ovsdb_trigger_server_run(db, now, &completed);
+        while (!ovs_list_is_empty(&completed)) {
+            do_trigger_dump(CONTAINER_OF(ovs_list_pop_front(&completed),
                                          struct test_trigger, trigger.node),
                             now, "delayed");
         }
 
-        ovsdb_trigger_wait(db, now);
+        ovsdb_trigger_server_wait(db, now);
         poll_immediate_wake();
         poll_block();
     }

@@ -22,6 +22,7 @@
 #include "openvswitch/types.h"
 #include "ovs-atomic.h"
 #include "ovs-thread.h"
+#include "trigger.h"
 #include "server.h"
 
 struct ovsdb;
@@ -135,11 +136,17 @@ struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_server_first_session(
 
 void ovsdb_jsonrpc_server_get_memory_usage(struct ovsdb_jsonrpc_server *,
                                            struct simap *usage);
+void ovsdb_jsonrpc_server_trigger_completed(struct ovs_list *);
 
 void ovsdb_jsonrpc_server_add_session(struct ovsdb_jsonrpc_server *,
                                       struct stream *,
                                       struct ovsdb_jsonrpc_remote *,
                                       uint8_t dscp);
+
+void ovsdb_jsonrpc_server_add_trigger(struct ovsdb_jsonrpc_server *,
+                                      struct ovsdb_trigger *);
+void ovsdb_jsonrpc_server_remove_trigger(struct ovsdb_jsonrpc_server *,
+                                          struct ovsdb_trigger *);
 
 /* IPC messages are used to communicate between the main thread and
  * jsonrpc sessions thread.
@@ -202,7 +209,8 @@ void ovsdb_jsonrpc_server_add_session(struct ovsdb_jsonrpc_server *,
        OVSDB_IPC_MESSAGE(CLOSE_SESSIONS) \
        OVSDB_IPC_MESSAGE(RECONNECT) \
        OVSDB_IPC_MESSAGE(SET_OPTIONS) \
-       OVSDB_IPC_MESSAGE(LOCK_NOTIFY)
+       OVSDB_IPC_MESSAGE(LOCK_NOTIFY) \
+       OVSDB_IPC_MESSAGE(TRIGGER)
 
 enum ovsdb_ipc_type {
 #define OVSDB_IPC_MESSAGE(MSG) OVSDB_IPC_##MSG,
@@ -225,6 +233,12 @@ void ovsdb_ipc_init(struct ovsdb_ipc *ipc, enum ovsdb_ipc_type message,
 struct ovsdb_ipc *
 ovsdb_ipc_lock_notify_create(struct ovsdb_jsonrpc_session *session,
                              const char *lock_name);
+
+enum ovsdb_ipc_trigger_subtype {
+     OVSDB_IPC_TRIGGER_ADD,
+     OVSDB_IPC_TRIGGER_REMOVE,
+     OVSDB_IPC_TRIGGER_COMPLETED
+};
 
 void ovsdb_ipc_sendto(struct sessions_handler *handler, struct ovsdb_ipc *ipc);
 
