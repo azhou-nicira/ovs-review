@@ -160,10 +160,13 @@ main_loop(struct ovsdb_jsonrpc_server *jsonrpc, struct shash *all_dbs,
         report_error_if_changed(reconfigure_ssl(all_dbs), &ssl_error);
         ovsdb_jsonrpc_server_run(jsonrpc);
 
+        struct ovs_list completed = OVS_LIST_INITIALIZER(&completed);
         SHASH_FOR_EACH(node, all_dbs) {
             struct db *db = node->data;
-            ovsdb_trigger_run(db->db, time_msec());
+            ovsdb_trigger_run(db->db, time_msec(), &completed);
         }
+        ovsdb_jsonrpc_server_trigger_completed(&completed);
+
         if (run_process) {
             process_run();
             if (process_exited(run_process)) {

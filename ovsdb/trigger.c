@@ -25,8 +25,10 @@
 #include "poll-loop.h"
 #include "server.h"
 
-static bool ovsdb_trigger_try(struct ovsdb_trigger *, long long int now);
-static void ovsdb_trigger_complete(struct ovsdb_trigger *);
+static bool ovsdb_trigger_try(struct ovsdb_trigger *, long long int now,
+                              struct ovs_list *completed);
+static void ovsdb_trigger_complete(struct ovsdb_trigger * t,
+                                   struct ovs_list *completed);
 
 void
 ovsdb_trigger_init(struct ovsdb_session *session, struct ovsdb *db,
@@ -35,19 +37,20 @@ ovsdb_trigger_init(struct ovsdb_session *session, struct ovsdb *db,
 {
     trigger->session = session;
     trigger->db = db;
-    ovs_list_push_back(&trigger->db->triggers, &trigger->node);
     trigger->request = request;
     trigger->result = NULL;
     trigger->created = now;
     trigger->timeout_msec = LLONG_MAX;
-    ovsdb_trigger_try(trigger, now);
+    trigger->result = NULL;
     ovs_refcount_init(&trigger->refcount);
 }
 
 void
 ovsdb_trigger_destroy(struct ovsdb_trigger *trigger)
 {
-    ovs_list_remove(&trigger->node);
+    if (!ovs_list_is_empty(&trigger->node)) {
+        ovs_list_remove(&trigger->node);
+    }
     json_destroy(trigger->request);
     json_destroy(trigger->result);
 }
@@ -67,7 +70,8 @@ ovsdb_trigger_steal_result(struct ovsdb_trigger *trigger)
 }
 
 void
-ovsdb_trigger_run(struct ovsdb *db, long long int now)
+ovsdb_trigger_run(struct ovsdb *db, long long int now,
+                  struct ovs_list *completed)
 {
     struct ovsdb_trigger *t, *next;
     bool run_triggers;
@@ -76,7 +80,7 @@ ovsdb_trigger_run(struct ovsdb *db, long long int now)
     db->run_triggers = false;
     LIST_FOR_EACH_SAFE (t, next, node, &db->triggers) {
         if (run_triggers || now - t->created >= t->timeout_msec) {
-            ovsdb_trigger_try(t, now);
+            ovsdb_trigger_try(t, now, completed);
         }
     }
 }
@@ -109,12 +113,13 @@ ovsdb_trigger_wait(struct ovsdb *db, long long int now)
 }
 
 static bool
-ovsdb_trigger_try(struct ovsdb_trigger *t, long long int now)
+ovsdb_trigger_try(struct ovsdb_trigger *t, long long int now,
+                  struct ovs_list *completed)
 {
     t->result = ovsdb_execute(t->db, t->session,
                               t->request, now - t->created, &t->timeout_msec);
     if (t->result) {
-        ovsdb_trigger_complete(t);
+        ovsdb_trigger_complete(t, completed);
         return true;
     } else {
         return false;
@@ -122,11 +127,11 @@ ovsdb_trigger_try(struct ovsdb_trigger *t, long long int now)
 }
 
 static void
-ovsdb_trigger_complete(struct ovsdb_trigger *t)
+ovsdb_trigger_complete(struct ovsdb_trigger *t, struct ovs_list *completed)
 {
     ovs_assert(t->result != NULL);
     ovs_list_remove(&t->node);
-    ovs_list_push_back(&t->session->completions, &t->node);
+    ovs_list_push_back(completed, &t->node);
 }
 
 struct ovsdb_trigger *
@@ -148,6 +153,7 @@ ovsdb_trigger_unref(const struct ovsdb_trigger *trigger_)
 
     trigger = CONST_CAST(struct ovsdb_trigger *, trigger_);
     if (trigger && ovs_refcount_unref(&trigger->refcount) == 1) {
+        ovsdb_trigger_destroy(trigger);
         free(trigger);
     }
 }

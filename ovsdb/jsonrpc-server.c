@@ -72,6 +72,8 @@ static void sessions_handler_init(struct sessions_handler *, unsigned int);
 static void sessions_handler_destroy(struct sessions_handler *);
 static void sessions_handler_ipc_run(struct sessions_handler *);
 static void sessions_handler_ipc_wait(struct sessions_handler *);
+static struct ovsdb_jsonrpc_session *sessions_handler_find_session(
+    struct sessions_handler *, struct ovsdb_session *);
 
 static struct ovs_list *handler_sessions(struct sessions_handler *handler);
 static struct sessions_handler *main_handler(struct ovsdb_jsonrpc_server *);
@@ -871,6 +873,14 @@ sessions_handler_ipc_wait(struct sessions_handler *handler)
     seq_wait(handler->ipc_queue_seq, handler->last_ipc_seq);
 }
 
+static struct ovsdb_jsonrpc_session *
+sessions_handler_find_session(struct sessions_handler *handler,
+                              struct ovsdb_session *session)
+{
+    return ovsdb_jsonrpc_sessions_find_session(handler_sessions(handler),
+                                               session);
+}
+
 
 void
 ovsdb_ipc_init(struct ovsdb_ipc *ipc, enum ovsdb_ipc_type message, size_t size)
@@ -1005,6 +1015,113 @@ clone_SYNC(struct ovsdb_ipc *ipc_)
     return ovsdb_ipc_dup(ipc_);
 }
 
+struct ovsdb_ipc_trigger {
+    struct ovsdb_ipc up;
+    enum ovsdb_ipc_trigger_subtype subtype;
+    struct ovsdb_trigger *trigger;
+};
+
+static struct ovsdb_ipc *
+ovsdb_ipc_trigger_create(enum ovsdb_ipc_trigger_subtype subtype,
+                         struct ovsdb_trigger *trigger)
+{
+    struct ovsdb_ipc_trigger *ipc;
+
+    ipc = xmalloc(sizeof *ipc);
+    ovsdb_ipc_init(&ipc->up, OVSDB_IPC_TRIGGER, sizeof *ipc);
+
+    ipc->subtype = subtype;
+    ipc->trigger = ovsdb_trigger_ref(trigger);
+
+    return &ipc->up;
+}
+
+static void
+handle_TRIGGER(struct sessions_handler *handler, struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_trigger *ipc;
+    struct ovsdb_trigger *trigger;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_trigger, up);
+    trigger = ipc->trigger;
+
+    switch(ipc->subtype) {
+    case OVSDB_IPC_TRIGGER_ADD:
+        /* Only main thread should get this message. */
+        ovsdb_trigger_ref(trigger);
+        ovs_list_push_back(&trigger->db->triggers, &trigger->node);
+        break;
+    case OVSDB_IPC_TRIGGER_REMOVE:
+        ovsdb_trigger_unref(trigger);
+        break;
+    case OVSDB_IPC_TRIGGER_COMPLETED:
+        if (sessions_handler_find_session(handler, trigger->session)) {
+            ovs_list_push_back(&trigger->session->completions, &trigger->node);
+        } else {
+            ovsdb_trigger_unref(ipc->trigger);
+        }
+
+        break;
+    }
+}
+
+static void
+dtor_TRIGGER(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_trigger *ipc;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_trigger, up);
+    ovsdb_trigger_unref(ipc->trigger);
+    free(ipc_);
+}
+
+static struct ovsdb_ipc *
+clone_TRIGGER(struct ovsdb_ipc *ipc_ OVS_UNUSED)
+{
+    VLOG_FATAL("unexpected cloning trigger IPC message");
+}
+
+void
+ovsdb_jsonrpc_server_trigger_completed(struct ovs_list *completed)
+{
+    struct ovsdb_trigger *trigger, *next;
+    struct ovsdb_ipc *ipc;
+
+    LIST_FOR_EACH_SAFE (trigger, next, node, completed) {
+        struct sessions_handler *h;
+
+        ovs_list_init(&trigger->node);
+        ipc = ovsdb_ipc_trigger_create(OVSDB_IPC_TRIGGER_COMPLETED,
+                                       trigger);
+        h = ovsdb_jsonrpc_session_handler(trigger->session);
+        ovsdb_ipc_sendto(h, ipc);
+    }
+}
+
+static void
+send_trigger_ipc(struct ovsdb_jsonrpc_server *svr,
+                 struct ovsdb_trigger *trigger,
+                 enum ovsdb_ipc_trigger_subtype subtype)
+{
+    struct ovsdb_ipc *ipc;
+    ipc = ovsdb_ipc_trigger_create(subtype, trigger);
+    ovsdb_ipc_sendto(main_handler(svr), ipc);
+}
+
+void
+ovsdb_jsonrpc_server_add_trigger(struct ovsdb_jsonrpc_server *svr,
+                                 struct ovsdb_trigger *trigger)
+{
+    send_trigger_ipc(svr, trigger, OVSDB_IPC_TRIGGER_ADD);
+}
+
+void
+ovsdb_jsonrpc_server_remove_trigger(struct ovsdb_jsonrpc_server *svr,
+                                    struct ovsdb_trigger *trigger)
+{
+    send_trigger_ipc(svr, trigger, OVSDB_IPC_TRIGGER_REMOVE);
+}
+
 /* Sync all handlers before execute 'exec'.
  *
  * This is a helper function for using OVSDB_IPC_SYNC.
@@ -1059,6 +1176,8 @@ ovsdb_ipc_msg_type_to_string(enum ovsdb_ipc_type ipc_type)
         return "set_options";
     case OVSDB_IPC_LOCK_NOTIFY:
         return "lock";
+    case OVSDB_IPC_TRIGGER:
+        return "trigger";
     case OVSDB_IPC_N_MESSAGES:
     default:
         ovs_fatal(0, "Not a valid IPC message");

@@ -40,6 +40,8 @@ struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_sessions_first(
     const struct ovs_list *, const struct ovsdb_jsonrpc_remote *);
 void ovsdb_jsonrpc_sessions_add(struct ovs_list *,
                                 struct ovsdb_jsonrpc_session *);
+struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_sessions_find_session(
+    struct ovs_list *, struct ovsdb_session *);
 
 /* Monitor */
 struct ovsdb_jsonrpc_monitor;
@@ -60,6 +62,8 @@ struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_session_create(
     struct ovsdb_jsonrpc_server *server, struct jsonrpc_session *js,
     struct ovsdb_jsonrpc_remote *remote, struct ovs_list *sessions);
 
+struct sessions_handler *ovsdb_jsonrpc_session_handler(
+    struct ovsdb_session *);
 bool ovsdb_jsonrpc_session_handled_locally(struct ovsdb_jsonrpc_session *s);
 
 struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_session_ref(

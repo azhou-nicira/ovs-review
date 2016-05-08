@@ -43,7 +43,7 @@ void ovsdb_trigger_destroy(struct ovsdb_trigger *);
 bool ovsdb_trigger_is_complete(const struct ovsdb_trigger *);
 struct json *ovsdb_trigger_steal_result(struct ovsdb_trigger *);
 
-void ovsdb_trigger_run(struct ovsdb *, long long int now);
+void ovsdb_trigger_run(struct ovsdb *, long long int now, struct ovs_list *);
 void ovsdb_trigger_wait(struct ovsdb *, long long int now);
 
 struct ovsdb_trigger *ovsdb_trigger_ref(const struct ovsdb_trigger *);

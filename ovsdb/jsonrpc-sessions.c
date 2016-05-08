@@ -634,6 +634,7 @@ ovsdb_jsonrpc_trigger_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
                              struct json *id, struct json *params)
 {
     struct ovsdb_jsonrpc_trigger *t;
+    struct ovsdb_jsonrpc_server *server;
     size_t hash;
 
     /* Check for duplicate ID. */
@@ -655,6 +656,8 @@ ovsdb_jsonrpc_trigger_create(struct ovsdb_jsonrpc_session *s, struct ovsdb *db,
     ovsdb_trigger_init(&s->up, db, &t->trigger, params, time_msec());
     t->id = id;
     hmap_insert(&s->triggers, &t->hmap_node, hash);
+    server = CONTAINER_OF(s->up.server, struct ovsdb_jsonrpc_server, up);
+    ovsdb_jsonrpc_server_add_trigger(server, &t->trigger);
 
     /* Complete early if possible. */
     if (ovsdb_trigger_is_complete(&t->trigger)) {
@@ -692,14 +695,20 @@ ovsdb_jsonrpc_trigger_complete(struct ovsdb_jsonrpc_trigger *t)
         if (result) {
             reply = jsonrpc_create_reply(result, t->id);
         } else {
+            struct ovsdb_jsonrpc_server *svr;
             reply = jsonrpc_create_error(json_string_create("canceled"),
                                          t->id);
+            /* Since trigger does not have result yet, the main
+             * thread may still have it. Send an IPC message to remove
+             * it from the main thread. */
+            svr = CONTAINER_OF(t->trigger.session->server,
+                               struct ovsdb_jsonrpc_server, up);
+            ovsdb_jsonrpc_server_remove_trigger(svr, &t->trigger);
         }
         ovsdb_jsonrpc_session_send(s, reply);
     }
 
     json_destroy(t->id);
-    ovsdb_trigger_destroy(&t->trigger);
     hmap_remove(&s->triggers, &t->hmap_node);
     ovsdb_trigger_unref(&t->trigger);
 }
@@ -1185,6 +1194,16 @@ ovsdb_jsonrpc_sessions_get_memory_usage(const struct ovs_list *sessions,
     }
 }
 
+struct sessions_handler *
+ovsdb_jsonrpc_session_handler(struct ovsdb_session *session)
+{
+    struct ovsdb_jsonrpc_session *s;
+
+    s = CONTAINER_OF(session, struct ovsdb_jsonrpc_session, up);
+
+    return s->handler;
+}
+
 bool
 ovsdb_jsonrpc_session_handled_locally(struct ovsdb_jsonrpc_session *s)
 {
@@ -1196,6 +1215,23 @@ ovsdb_jsonrpc_sessions_add(struct ovs_list *sessions,
                            struct ovsdb_jsonrpc_session *s)
 {
     ovs_list_push_back(sessions, &s->node);
+}
+
+struct ovsdb_jsonrpc_session *
+ovsdb_jsonrpc_sessions_find_session(struct ovs_list *sessions,
+                                    struct ovsdb_session *session)
+{
+    struct ovsdb_jsonrpc_session *s, *js;
+
+    s = CONTAINER_OF(session, struct ovsdb_jsonrpc_session, up);
+
+    LIST_FOR_EACH (js, node, sessions) {
+        if (js == s) {
+            return js;
+        }
+    }
+
+    return NULL;
 }
 
 struct ovsdb_jsonrpc_session *
