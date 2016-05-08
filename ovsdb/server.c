@@ -25,7 +25,6 @@ void
 ovsdb_session_init(struct ovsdb_session *session, struct ovsdb_server *server)
 {
     session->server = server;
-    ovs_list_init(&session->completions);
     hmap_init(&session->waiters);
 }
 

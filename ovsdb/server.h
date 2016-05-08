@@ -29,7 +29,6 @@ struct ovsdb_server;
  * (e.g. jsonrpc-server.c) embed this in a larger data structure.  */
 struct ovsdb_session {
     struct ovsdb_server *server;
-    struct ovs_list completions;/* Completed triggers. */
     struct hmap waiters;        /* "ovsdb_lock_waiter *"s by lock name. */
 };
 
