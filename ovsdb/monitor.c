@@ -1083,12 +1083,11 @@ ovsdb_monitor_add(struct ovsdb_monitor *new_dbmon)
 
     hash = ovsdb_monitor_hash(new_dbmon, 0);
     HMAP_FOR_EACH_WITH_HASH(dbmon, hmap_node, hash, &ovsdb_monitors) {
-        if (ovsdb_monitor_equal(dbmon,  new_dbmon)) {
-            return ovsdb_monitor_ref(dbmon);
+        if (ovsdb_monitor_equal(dbmon, new_dbmon)) {
+            return dbmon;
         }
     }
 
-    ovsdb_monitor_ref(new_dbmon);
     hmap_insert(&ovsdb_monitors, &new_dbmon->hmap_node, hash);
     return new_dbmon;
 }

@@ -49,6 +49,18 @@ struct ovsdb_jsonrpc_session *ovsdb_jsonrpc_sessions_find_session(
 struct ovsdb_jsonrpc_monitor;
 void ovsdb_jsonrpc_monitor_destroy(struct ovsdb_jsonrpc_monitor *);
 void ovsdb_jsonrpc_disable_monitor2(void);
+void ovsdb_jsonrpc_session_remove_monitor(struct ovsdb_jsonrpc_monitor *);
+void ovsdb_jsonrpc_session_add_monitor(struct ovsdb_jsonrpc_monitor *);
+struct ovsdb_jsonrpc_monitor * ovsdb_jsonrpc_monitor_ref(
+    const struct ovsdb_jsonrpc_monitor *);
+void ovsdb_jsonrpc_monitor_unref(const struct ovsdb_jsonrpc_monitor *);
+
+void ovsdb_jsonrpc_monitor_server_add(struct ovsdb_jsonrpc_monitor *);
+void ovsdb_jsonrpc_monitor_server_remove(struct ovsdb_jsonrpc_monitor *);
+void ovsdb_jsonrpc_monitor_session_add(struct ovs_list *list,
+                                       struct ovsdb_jsonrpc_monitor *);
+void ovsdb_jsonrpc_monitor_session_remove(struct ovs_list *list,
+                                       struct ovsdb_jsonrpc_monitor *);
 
 /* Lock. */
 void ovsdb_jsonrpc_sessions_lock_notify(struct ovs_list *sessions,
