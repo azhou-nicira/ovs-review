@@ -72,8 +72,6 @@ static void sessions_handler_init(struct sessions_handler *, unsigned int);
 static void sessions_handler_destroy(struct sessions_handler *);
 static void sessions_handler_ipc_run(struct sessions_handler *);
 static void sessions_handler_ipc_wait(struct sessions_handler *);
-static struct ovsdb_jsonrpc_session *sessions_handler_find_session(
-    struct sessions_handler *, struct ovsdb_session *);
 
 static struct ovs_list *handler_sessions(struct sessions_handler *handler);
 static struct sessions_handler *main_handler(struct ovsdb_jsonrpc_server *);
@@ -873,14 +871,6 @@ sessions_handler_ipc_wait(struct sessions_handler *handler)
     seq_wait(handler->ipc_queue_seq, handler->last_ipc_seq);
 }
 
-static struct ovsdb_jsonrpc_session *
-sessions_handler_find_session(struct sessions_handler *handler,
-                              struct ovsdb_session *session)
-{
-    return ovsdb_jsonrpc_sessions_find_session(handler_sessions(handler),
-                                               session);
-}
-
 
 void
 ovsdb_ipc_init(struct ovsdb_ipc *ipc, enum ovsdb_ipc_type message, size_t size)
@@ -1055,12 +1045,8 @@ handle_TRIGGER(struct sessions_handler *handler, struct ovsdb_ipc *ipc_)
         ovsdb_trigger_unref(trigger);
         break;
     case OVSDB_IPC_TRIGGER_COMPLETED:
-        if (sessions_handler_find_session(handler, trigger->session)) {
-            ovs_list_push_back(&trigger->session->completions, &trigger->node);
-        } else {
-            ovsdb_trigger_unref(ipc->trigger);
-        }
-
+        ovsdb_jsonrpc_sessions_trigger_complete(handler_sessions(handler),
+                                                trigger);
         break;
     }
 }
@@ -1122,6 +1108,71 @@ ovsdb_jsonrpc_server_remove_trigger(struct ovsdb_jsonrpc_server *svr,
     send_trigger_ipc(svr, trigger, OVSDB_IPC_TRIGGER_REMOVE);
 }
 
+struct ovsdb_ipc_monitor {
+    struct ovsdb_ipc up;
+    enum ovsdb_ipc_monitor_subtype subtype;
+    struct ovsdb_jsonrpc_monitor *jsonrpc_monitor;
+};
+
+struct ovsdb_ipc *
+ovsdb_ipc_monitor_create(enum ovsdb_ipc_monitor_subtype subtype,
+                         struct ovsdb_jsonrpc_monitor *jsonrpc_monitor)
+{
+    struct ovsdb_ipc_monitor *ipc;
+
+    ipc = xmalloc(sizeof *ipc);
+    ovsdb_ipc_init(&ipc->up, OVSDB_IPC_MONITOR, sizeof *ipc);
+
+    ipc->subtype = subtype;
+    ipc->jsonrpc_monitor = ovsdb_jsonrpc_monitor_ref(jsonrpc_monitor);
+
+    return &ipc->up;
+}
+
+static void
+handle_MONITOR(struct sessions_handler *handler, struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_monitor *ipc;
+    struct ovsdb_jsonrpc_monitor *m;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_monitor, up);
+    m = ipc->jsonrpc_monitor;
+
+    switch(ipc->subtype) {
+    case OVSDB_IPC_MONITOR_SERVER_ADD:
+       ovsdb_jsonrpc_monitor_server_add(m);
+        break;
+
+    case OVSDB_IPC_MONITOR_SESSION_ADD:
+        ovsdb_jsonrpc_monitor_session_add(handler_sessions(handler), m);
+        break;
+
+    case OVSDB_IPC_MONITOR_SERVER_REMOVE:
+        ovsdb_jsonrpc_monitor_server_remove(m);
+        break;
+
+    case OVSDB_IPC_MONITOR_SESSION_REMOVE:
+        ovsdb_jsonrpc_monitor_session_remove(handler_sessions(handler), m);
+        break;
+    }
+}
+
+static void
+dtor_MONITOR(struct ovsdb_ipc *ipc_)
+{
+    struct ovsdb_ipc_monitor *ipc;
+
+    ipc = CONTAINER_OF(ipc_, struct ovsdb_ipc_monitor, up);
+    ovsdb_jsonrpc_monitor_unref(ipc->jsonrpc_monitor);
+    free(ipc_);
+}
+
+static struct ovsdb_ipc *
+clone_MONITOR(struct ovsdb_ipc *ipc_ OVS_UNUSED)
+{
+    VLOG_FATAL("unexpected cloning monitor IPC message");
+}
+
 /* Sync all handlers before execute 'exec'.
  *
  * This is a helper function for using OVSDB_IPC_SYNC.
@@ -1178,6 +1229,8 @@ ovsdb_ipc_msg_type_to_string(enum ovsdb_ipc_type ipc_type)
         return "lock";
     case OVSDB_IPC_TRIGGER:
         return "trigger";
+    case OVSDB_IPC_MONITOR:
+        return "monitor";
     case OVSDB_IPC_N_MESSAGES:
     default:
         ovs_fatal(0, "Not a valid IPC message");

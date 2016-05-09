@@ -210,7 +210,8 @@ void ovsdb_jsonrpc_server_remove_trigger(struct ovsdb_jsonrpc_server *,
        OVSDB_IPC_MESSAGE(RECONNECT) \
        OVSDB_IPC_MESSAGE(SET_OPTIONS) \
        OVSDB_IPC_MESSAGE(LOCK_NOTIFY) \
-       OVSDB_IPC_MESSAGE(TRIGGER)
+       OVSDB_IPC_MESSAGE(TRIGGER) \
+       OVSDB_IPC_MESSAGE(MONITOR)
 
 enum ovsdb_ipc_type {
 #define OVSDB_IPC_MESSAGE(MSG) OVSDB_IPC_##MSG,
@@ -239,6 +240,18 @@ enum ovsdb_ipc_trigger_subtype {
      OVSDB_IPC_TRIGGER_REMOVE,
      OVSDB_IPC_TRIGGER_COMPLETED
 };
+
+enum ovsdb_ipc_monitor_subtype {
+     OVSDB_IPC_MONITOR_SERVER_ADD,
+     OVSDB_IPC_MONITOR_SERVER_REMOVE,
+     OVSDB_IPC_MONITOR_SESSION_ADD,
+     OVSDB_IPC_MONITOR_SESSION_REMOVE
+};
+
+struct ovsdb_jsonrpc_monitor;
+struct ovsdb_ipc *
+ovsdb_ipc_monitor_create(enum ovsdb_ipc_monitor_subtype subtype,
+                         struct ovsdb_jsonrpc_monitor *jsonrpc_monitor);
 
 void ovsdb_ipc_sendto(struct sessions_handler *handler, struct ovsdb_ipc *ipc);
 

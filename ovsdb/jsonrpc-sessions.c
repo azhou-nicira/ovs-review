@@ -110,10 +110,9 @@ static void ovsdb_jsonrpc_monitor_flush_all(struct ovsdb_jsonrpc_session *);
 static bool ovsdb_jsonrpc_monitor_needs_flush(struct ovsdb_jsonrpc_session *);
 static struct json *ovsdb_jsonrpc_monitor_compose_update(
     struct ovsdb_jsonrpc_monitor *monitor, bool initial);
+static struct ovsdb_jsonrpc_monitor * ovsdb_jsonrpc_monitor_find(
+    struct ovsdb_jsonrpc_session *s, const struct json *monitor_id);
 
-
-/* Set false to defeature monitor2, causing jsonrpc to respond to monitor2
- * method with an error.  */
 static bool monitor2_enable__ = true;
 
 
@@ -732,6 +731,22 @@ ovsdb_jsonrpc_trigger_complete_done(struct ovsdb_jsonrpc_session *s)
         ovsdb_jsonrpc_trigger_complete(t);
     }
 }
+
+void
+ovsdb_jsonrpc_sessions_trigger_complete(struct ovs_list *sessions,
+                                        struct ovsdb_trigger *trigger)
+{
+    struct ovsdb_jsonrpc_session *s, *ts;
+
+    ts = CONTAINER_OF (trigger->session, struct ovsdb_jsonrpc_session, up);
+
+    s = ovsdb_jsonrpc_sessions_find_session(sessions, ts);
+    if (s) {
+        ovs_list_push_back(&trigger->session->completions, &trigger->node);
+        ovsdb_trigger_ref(trigger);
+    }
+}
+
 
 /* Jsonrpc front end monitor. */
 struct ovsdb_jsonrpc_monitor {
@@ -743,7 +758,100 @@ struct ovsdb_jsonrpc_monitor {
     uint64_t unflushed;         /* The first transaction that has not been
                                        flushed to the jsonrpc remote client. */
     enum ovsdb_monitor_version version;
+    struct ovs_refcount refcount;
 };
+
+
+void
+ovsdb_jsonrpc_monitor_server_add(struct ovsdb_jsonrpc_monitor *m)
+{
+    struct ovsdb_monitor *dbmon;
+    struct ovsdb_ipc *ipc;
+
+    dbmon = ovsdb_monitor_add(m->dbmon);
+    if (dbmon != m->dbmon) {
+        /* Reuse existing dbmon. */
+        ovsdb_monitor_remove_jsonrpc_monitor(m->dbmon, m, m->unflushed);
+        ovsdb_monitor_add_jsonrpc_monitor(dbmon, m);
+        free(m->dbmon);
+        m->dbmon = dbmon;
+    }
+
+    /* Let sesssion add the monitor.  */
+    ipc = ovsdb_ipc_monitor_create(OVSDB_IPC_MONITOR_SESSION_ADD, m);
+    ovsdb_ipc_sendto(m->session->handler, ipc);
+}
+
+void
+ovsdb_jsonrpc_monitor_session_add(struct ovs_list *sessions,
+                                  struct ovsdb_jsonrpc_monitor *m)
+{
+    struct ovsdb_jsonrpc_session *s;
+
+    s = ovsdb_jsonrpc_sessions_find_session(sessions, m->session);
+    if (s) {
+        ovs_assert(m == ovsdb_jsonrpc_monitor_find(s, m->monitor_id));
+        ovsdb_jsonrpc_monitor_ref(m);
+        hmap_insert(&s->monitors, &m->node, json_hash(m->monitor_id, 0));
+    }
+}
+
+void
+ovsdb_jsonrpc_monitor_server_remove(struct ovsdb_jsonrpc_monitor *m)
+{
+    ovsdb_monitor_remove_jsonrpc_monitor(m->dbmon, m, m->unflushed);
+    ovsdb_jsonrpc_monitor_unref(m);
+}
+
+/* Implementation for "OVSDB_IPC_MONITOR_SESSION_REMOVE". */
+void
+ovsdb_jsonrpc_monitor_session_remove(struct ovs_list *sessions,
+    struct ovsdb_jsonrpc_monitor *m)
+{
+    struct ovsdb_jsonrpc_session *s;
+
+    s = ovsdb_jsonrpc_sessions_find_session(sessions, m->session);
+    /* Skip the message if the session has been deleted in the meantime. */
+    if (s) {
+        if (m != ovsdb_jsonrpc_monitor_find(s, m->monitor_id)) {
+            /* Make sure the monitor has not been deleted by the
+             * session. */
+            return ;
+        }
+        hmap_remove(&m->session->monitors, &m->node);
+        ovsdb_jsonrpc_monitor_unref(m);
+    }
+}
+
+struct ovsdb_jsonrpc_monitor *
+ovsdb_jsonrpc_monitor_ref(const struct ovsdb_jsonrpc_monitor *monitor_)
+{
+    struct ovsdb_jsonrpc_monitor *monitor;
+
+    monitor = CONST_CAST(struct ovsdb_jsonrpc_monitor *, monitor_);
+
+    if (monitor) {
+        ovs_refcount_ref(&monitor->refcount);
+        ovsdb_jsonrpc_session_ref(monitor->session);
+    }
+
+    return monitor;
+}
+
+void
+ovsdb_jsonrpc_monitor_unref(const struct ovsdb_jsonrpc_monitor * monitor_)
+{
+    struct ovsdb_jsonrpc_monitor *monitor;
+
+    monitor = CONST_CAST(struct ovsdb_jsonrpc_monitor *, monitor_);
+
+    if (monitor) {
+        ovsdb_jsonrpc_session_unref(monitor->session);
+        if (ovs_refcount_unref(&monitor->refcount) == 1) {
+            free(monitor);
+        }
+    }
+}
 
 static struct ovsdb_jsonrpc_monitor *
 ovsdb_jsonrpc_monitor_find(struct ovsdb_jsonrpc_session *s,
@@ -1218,15 +1326,13 @@ ovsdb_jsonrpc_sessions_add(struct ovs_list *sessions,
 }
 
 struct ovsdb_jsonrpc_session *
-ovsdb_jsonrpc_sessions_find_session(struct ovs_list *sessions,
-                                    struct ovsdb_session *session)
+ovsdb_jsonrpc_sessions_find_session(const struct ovs_list *sessions,
+                                    const struct ovsdb_jsonrpc_session *s)
 {
-    struct ovsdb_jsonrpc_session *s, *js;
-
-    s = CONTAINER_OF(session, struct ovsdb_jsonrpc_session, up);
+    struct ovsdb_jsonrpc_session *js;
 
     LIST_FOR_EACH (js, node, sessions) {
-        if (js == s) {
+        if (s == js) {
             return js;
         }
     }
