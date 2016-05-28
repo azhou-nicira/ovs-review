@@ -265,6 +265,12 @@ usage(void)
            "    the wire."
            "\n  dump [SERVER] [DATABASE]\n"
            "    dump contents of DATABASE on SERVER to stdout\n"
+           "\n  lock [SERVER] [LOCK]\n"
+           "    create LOCK in SERVER\n"
+           "\n  steal [SERVER] [LOCK]\n"
+           "    steal LOCK from SERVER\n"
+           "\n  unlock [SERVER] [LOCK]\n"
+           "    unlock LOCK from SERVER\n"
            "\nThe default SERVER is unix:%s/db.sock.\n"
            "The default DATABASE is Open_vSwitch.\n",
            program_name, program_name, ovs_rundir());
@@ -1314,6 +1320,55 @@ do_help(struct jsonrpc *rpc OVS_UNUSED, const char *database OVS_UNUSED,
     usage();
 }
 
+static void
+do_txn(struct jsonrpc *rpc, struct jsonrpc_msg *request)
+{
+    struct jsonrpc_msg *reply;
+
+    check_txn(jsonrpc_transact_block(rpc, request, &reply), &reply);
+    print_json(reply->result);
+    putchar('\n');
+    jsonrpc_msg_destroy(reply);
+}
+
+static void
+do_lock(struct jsonrpc *rpc, const char *method, int argc, char *argv[])
+{
+    struct jsonrpc_msg *request;
+    struct json *locks, *lock;
+    int i;
+
+    locks = json_array_create_empty();
+    for (i = 0; i < argc; i++) {
+        lock = json_string_create(argv[i]);
+        json_array_add(locks, lock);
+    }
+
+    request = jsonrpc_create_request(method, locks, NULL);
+    do_txn(rpc, request);
+}
+
+static void
+do_lock_create(struct jsonrpc *rpc OVS_UNUSED, const char *database OVS_UNUSED,
+        int argc, char *argv[])
+{
+    do_lock(rpc, "lock", argc, argv);
+}
+
+static void
+do_lock_steal(struct jsonrpc *rpc OVS_UNUSED, const char *database OVS_UNUSED,
+        int argc, char *argv[])
+{
+    do_lock(rpc, "steal", argc, argv);
+}
+
+static void
+do_lock_unlock(struct jsonrpc *rpc, const char *database OVS_UNUSED,
+        int argc, char *argv[])
+{
+    do_lock(rpc, "unlock", argc, argv);
+}
+
 /* All command handlers (except for "help") are expected to take an optional
  * server socket name (e.g. "unix:...") as their first argument.  The socket
  * name argument must be included in max_args (but left out of min_args).  The
@@ -1331,6 +1386,9 @@ static const struct ovsdb_client_command all_commands[] = {
     { "monitor",            NEED_DATABASE, 1, INT_MAX, do_monitor },
     { "monitor2",           NEED_DATABASE, 1, INT_MAX, do_monitor2 },
     { "dump",               NEED_DATABASE, 0, INT_MAX, do_dump },
+    { "lock",               NEED_RPC,      1, INT_MAX, do_lock_create },
+    { "steal",              NEED_RPC,      1, INT_MAX, do_lock_steal },
+    { "unlock",             NEED_RPC,      1, INT_MAX, do_lock_unlock },
     { "help",               NEED_NONE,     0, INT_MAX, do_help },
 
     { NULL,                 0,             0, 0,       NULL },
