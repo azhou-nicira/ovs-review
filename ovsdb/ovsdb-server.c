@@ -83,6 +83,8 @@ static unixctl_cb_func ovsdb_server_perf_counters_clear;
 static unixctl_cb_func ovsdb_server_perf_counters_show;
 static unixctl_cb_func ovsdb_server_disable_monitor2;
 
+static int max_threads = 0;
+
 struct server_config {
     struct sset *remotes;
     struct shash *all_dbs;
@@ -263,7 +265,7 @@ main(int argc, char *argv[])
 
     /* Load the saved config. */
     load_config(config_tmpfile, &remotes, &db_filenames);
-    jsonrpc = ovsdb_jsonrpc_server_create(0);
+    jsonrpc = ovsdb_jsonrpc_server_create(max_threads);
 
     shash_init(&all_dbs);
     server_config.all_dbs = &all_dbs;
@@ -1319,6 +1321,7 @@ parse_options(int *argcp, char **argvp[],
         {"private-key", required_argument, NULL, 'p'},
         {"certificate", required_argument, NULL, 'c'},
         {"ca-cert",     required_argument, NULL, 'C'},
+        {"max-threads", required_argument, NULL, 'T'},
         {NULL, 0, NULL, 0},
     };
     char *short_options = ovs_cmdl_long_options_to_short_options(long_options);
@@ -1368,6 +1371,10 @@ parse_options(int *argcp, char **argvp[],
         case 'C':
             ca_cert_file = optarg;
             bootstrap_ca_cert = false;
+            break;
+
+        case 'T':
+            max_threads = atoi(optarg);
             break;
 
         case OPT_BOOTSTRAP_CA_CERT:
