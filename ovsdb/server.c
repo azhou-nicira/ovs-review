@@ -84,6 +84,7 @@ ovsdb_lock_waiter_remove(struct ovsdb_lock *lock,
         ovs_mutex_lock(&lock->server->mutex);
         hmap_remove(&lock->server->locks, &lock->hmap_node);
         ovs_mutex_unlock(&lock->server->mutex);
+        ovs_mutex_unlock(&lock->mutex);
         free(lock->name);
         free(lock);
         return NULL;
@@ -228,6 +229,7 @@ ovsdb_server_lock(struct ovsdb_server *server,
 
     ovs_mutex_lock(&server->mutex);
     lock = ovsdb_server_create_lock__(server, lock_name, hash);
+    ovs_mutex_init(&lock->mutex);
     ovs_mutex_lock(&lock->mutex);
     ovs_mutex_unlock(&server->mutex);
 

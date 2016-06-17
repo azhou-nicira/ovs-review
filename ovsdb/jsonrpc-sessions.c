@@ -386,10 +386,10 @@ ovsdb_jsonrpc_session_unlock__(struct ovsdb_lock_waiter *waiter)
 
         if (new_owner) {
             ovsdb_jsonrpc_session_notify(new_owner, lock->name, "locked");
+            ovs_mutex_unlock(&lock->mutex);
         } else {
             /* ovsdb_server_lock() might have freed 'lock'. */
         }
-        ovs_mutex_unlock(&lock->mutex);
     }
 
     ovsdb_lock_waiter_destroy(waiter);
