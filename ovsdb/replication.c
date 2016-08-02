@@ -455,15 +455,16 @@ process_notification(struct json *table_updates, struct ovsdb *database)
         }
     }
 
-    if (!error){
-        /* Commit transaction. */
-        error = ovsdb_txn_commit(txn, false);
-        if (error) {
-            ovsdb_error_assert(error);
-            disconnect_remote_server();
-        }
-    } else {
+    if (error) {
         ovsdb_txn_abort(txn);
+        goto error;
+    }
+
+    /* Commit transaction. */
+    error = ovsdb_txn_commit(txn, false);
+
+error:
+    if (error) {
         ovsdb_error_assert(error);
         disconnect_remote_server();
     }
