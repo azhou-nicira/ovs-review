@@ -1,0 +1,379 @@
+#! /bin/bash
+#
+# Copyright (C) 2016 Nicira, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at:
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+SSH_OPTIONS='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o logLevel=quiet -o GSSAPIAuthentication=no'
+
+download_ubuntu_1404() {
+    # Download the ready to use image. It would be nice if we can just get
+    # them over a ftp server.
+    git clone https://github.com/azhou-nicira/ovs-ubuntu-img;
+    (cd ovs-ubuntu-img;  cat ovs-ubuntu-* |(cd ../; tar xzf -);)
+}
+
+set_defaults() {
+    QEMU_IMG="ubuntu-14.04"
+    QEMU_CMD="qemu-system-x86_64"
+}
+
+booted_kernel_version() {
+    local bootlog=$1
+    echo `grep "0.000000] Linux version" $bootlog |awk '{print $5}'`
+}
+
+# extract_build_dir(console_log_file)
+extract_build_dir() {
+    local console_log=$1
+    KERNEL_VERSION=$(booted_kernel_version $console_log)
+    echo "extracting build files for $KERNEL_VERSION"
+    copy_out /lib/modules/$KERNEL_VERSION/build ./
+    return 0;
+}
+
+wait_for_boot() {
+    while [ -e $QEMU_PID_FILE ]
+    do
+        grep "QEMU KMOD TEST IS READY" $QEMU_CONSOLE  > /dev/null
+        if [ $? -eq 0 ]; then
+            return 0;
+        fi
+        sleep 1;
+    done
+
+    return -1
+}
+
+kill_qemu() {
+    if [ -e $QEMU_PID_FILE ]; then
+        pid=`cat $QEMU_PID_FILE`
+        kill -9 $pid
+        rm -rf $QEMU_PID_FILE
+    fi
+}
+
+# Launch an instance of qemu, it can be reach by ssh 127.0.0.1:2222
+launch_qemu() {
+    local cmdline
+    local ovs_path=$1
+    local rc
+
+    if [ -e $QEMU_PID_FILE ]; then
+        kill_qemu
+    fi
+
+    if [ -z "$ovs_path" ]; then
+       ovs_path=`pwd`
+    fi
+
+    if [ -e user-data ]; then
+        cloud-localds seed.img user-data
+    else
+        echo "Can't find or create seed.img, exiting..."
+        exit -1;
+    fi
+
+    cmdline="$QEMU_CMD"
+
+    # NO GUI
+    cmdline="$cmdline -display none"
+
+    # Network
+    cmdline="$cmdline -netdev user,id=m0"
+    cmdline="$cmdline -device e1000,netdev=m0"
+
+    #Memory
+    cmdline="$cmdline -m 1024"
+
+    #Local access
+    cmdline="$cmdline -redir tcp:2222::22"
+
+    #Boot disk
+    cmdline="$cmdline -hda $QEMU_RT_IMG"
+
+    #Seed disk
+    cmdline="$cmdline -hdb seed.img"
+
+    #Local disk access using 9p
+    cmdline="$cmdline -fsdev local,id=r,path=$ovs_path,security_model=mapped"
+    cmdline="$cmdline -device virtio-9p-pci,fsdev=r,mount_tag=r"
+
+    #Log console output to $QEMU_CONSOLE
+    touch $QEMU_CONSOLE
+    cp /dev/null $QEMU_CONSOLE
+    cmdline="$cmdline -serial file:$QEMU_CONSOLE"
+
+    #Run in the background
+    cmdline="$cmdline -daemonize"
+
+    #Stores pid into $QEMU_PID_FILE
+    cmdline="$cmdline -pidfile $QEMU_PID_FILE"
+
+    $cmdline $*
+
+    rc=$?
+    if [ $rc -ne 0  ]; then
+        echo "kill, rc=$rc"
+        kill_qemu
+    fi
+
+    return $rc
+}
+
+# Convert known image names to its upstream URLs
+#
+img_name_to_url() {
+    local url
+    local from
+    local img_name
+    local img=$1
+    case $img in
+        "ubuntu-12.04")
+            from="http://cloud-images.ubuntu.com/server/releases/12.04/release"
+            img_name="ubuntu-12.04-server-cloudimg-amd64-disk1.img"
+
+            url="$from/$img_name"
+            ;;
+        "ubuntu-14.04")
+            from="http://cloud-images.ubuntu.com/server/releases/14.04/release"
+            img_name="ubuntu-14.04-server-cloudimg-amd64-disk1.img"
+
+            url="$from/$img_name"
+            ;;
+        *)
+            url=""
+            ;;
+    esac
+
+    echo $url
+}
+
+ubuntu_cloud_config () {
+    cat > $1 << EOF
+#cloud-config
+password: passw0rd
+chpasswd: { expire: False }
+ssh_pwauth: True
+sudo: ['ALL=(ALL) NOPASSWD:ALL']
+groups: sudo
+shell: /bin/bash
+hostname: ovs-runner
+localhost: ovs-runner
+manage_etc_hosts: true
+write_files:
+    - path: /etc/modules-load.d/9p.conf
+      permissions: '0644'
+      content: |
+        9p
+        9pnet
+        9pnet_virtio
+    - path: /etc/mount-host.sh
+      permissions: '0764'
+      content: |
+        #! /bin/bash
+
+        ovs_path=\$1
+        if [ ! -e "\$ovs_path" ]; then
+            mkdir -p "\$ovs_path"
+            mkdir -p /mnt/host
+            mount -t 9p -o trans=virtio,9p2000.L r /mnt/host
+            mount --bind /mnt/host "\$ovs_path"
+        fi
+
+runcmd:
+    - apt-get --purge autoremove openvswitch-switch
+    - (cd /lib/modules; find . -name openvswitch.ko -delete)
+
+packages:
+    -  gcc
+    -  make
+    -  automake
+    -  libtool
+
+final_message: "QEMU KMOD TEST IS READY, booted in \$UPTIME seconds:"
+EOF
+}
+
+ssh_qemu() {
+    sshpass -p passw0rd ssh $SSH_OPTIONS -p 2222 ubuntu@localhost $*
+}
+
+copy_in() {
+   sshpass -p passw0rd scp $SSH_OPTIONS -p 2222 $* ubuntu@localhost:"${@: -1}"
+}
+
+copy_out() {
+   sshpass -p passw0rd scp $SSH_OPTIONS -rP 2222 ubuntu@localhost:$1 $2
+}
+
+run_cmd() {
+   sshpass -p passw0rd ssh $SSH_OPTIONS -p 2222 $*
+}
+
+## ----- ##
+## start ##
+## ----- ##
+
+usage () {
+    set_defaults
+    cat <<EOF
+    help message
+EOF
+    exit 0
+}
+
+set_defaults
+command=
+args=
+for arg
+do
+    case $arg in
+        -h | --help)
+            usage
+            ;;
+        --qemu)
+            QEMU_CMD=$arg
+            ;;
+        --img)
+            QEMU_IMG=$arg
+            ;;
+        --wait)
+            wait_until_booted=1
+            ;;
+        --*)
+            echo >&2 "$0: unknown option \"$arg\" (use --help for help)"
+            exit 1
+            ;;
+        *)
+            if test X"$command" = X; then
+                command=$arg
+            else
+                #Collect extra arguments
+                args="$args $arg"
+            fi
+            ;;
+    esac
+done
+
+QEMU_CONSOLE=console.log
+QEMU_PID_FILE=qemu.pid
+QEMU_ORIG_IMG=$QEMU_IMG.orig
+QEMU_RT_IMG=$QEMU_IMG.qcow2
+FETCH_URL=`img_name_to_url $QEMU_IMG`
+
+case $command in
+    fetch)
+        if [ -z $FETCH_URL ]; then
+            echo >&2 "$0: Don't know how to downlaod $QEMU_IMG."
+            exit -1
+        fi
+        echo "Downloading $QEMU_IMG from $FETCH_URL into $QEMU_ORIG_IMG"
+        wget $FETCH_URL -O $QEMU_ORIG_IMG
+        ;;
+
+    prepare)
+
+        if [ -e $QEMU_ORIG_IMG ]; then
+            kill_qemu
+            cp $QEMU_ORIG_IMG $QEMU_RT_IMG
+        else
+            echo "$QEMU_ORIG_IMG not found. Please use the fetch"
+            echo "command to download it first"
+            exit -1
+        fi
+
+        # Make sure seed.img is regenerated
+        ubuntu_cloud_config user-data
+
+        echo "Launch QEMU VM for the first time, init instance"
+        launch_qemu
+        if [ ! $? -eq 0 ]; then
+            echo "failed."
+            exit -1
+        fi
+
+        pid=`cat $QEMU_PID_FILE`
+        echo "Waiting for QEMU VM (pid=$pid) finishing booting... This may take a while."
+        echo "You can use 'tail -f $QEMU_CONSOLE' to monitor the progress."
+        wait_for_boot || exit -1
+        echo "Done. Extracting the kernel build directory..."
+        extract_build_dir $QEMU_CONSOLE  || exit -1
+        echo "Done."
+        kill_qemu
+        ;;
+
+    extract)
+        if [ ! -e $QEMU_PID_FILE ]; then
+            echo "Only works when QEMU is running"
+            exit -1
+        fi
+        wait_for_boot
+        extract_build_dir
+        ;;
+
+    launch)
+        # launch the image and run ovs-qemu-cmd
+        launch_qemu $args
+        if [ $wait_until_booted ]; then
+            wait_for_boot
+        fi
+        ;;
+
+    download)
+        # Download a prepared system iamge
+        if [ $QEMU_IMG == ubuntu-14.04 ]; then
+            download_ubuntu_1404
+        fi
+        ;;
+
+    upload)
+        # upload to the FTP server
+        if [ $QEMU_IMG == ubuntu-14.04 ]; then
+            IMG_GIT=ovs-ubuntu-img
+        else
+            echo "Don't know how to upload, exiting..."
+            exit -1
+        fi
+
+        echo "tar up '$QEMU_RT_IMG' 'user-data' and 'build' into 5MB chunks"
+        tar cz $QEMU_RT_IMG user-data build \
+            | (cd $IMG_GIT; split -b 5M - ovs-ubuntu-)
+        echo "Done. Please use git push to upload in directory $IMG_GIT' "
+        ;;
+
+    ssh)
+        # login to the QEMU VM using ssh"
+        ssh_qemu $args
+        ;;
+
+    wait)
+        # Wait for teh QEMU VM to be fully booted
+        wait_for_boot
+        ;;
+
+    kill)
+        # Kill the running instance of QEMU VM
+        kill_qemu
+        ;;
+
+    '')
+        echo >&2 "$0: missing command name (use --help for help)"
+        exit 1
+        ;;
+
+    *)
+        echo >&2 "$0: unknown command \"$command\" (use --help for help)"
+        exit 1
+        ;;
+esac

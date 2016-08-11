@@ -39,6 +39,7 @@ utilities/ovs-lib: $(top_builddir)/config.status
 
 docs += utilities/ovs-command-bashcomp.INSTALL.md
 EXTRA_DIST += \
+	utilities/checkpatch.py \
 	utilities/ovs-appctl-bashcomp.bash \
 	utilities/ovs-check-dead-ifs.in \
 	utilities/ovs-command-bashcomp.INSTALL.md \
@@ -52,13 +53,13 @@ EXTRA_DIST += \
 	utilities/ovs-pcap.in \
 	utilities/ovs-pipegen.py \
 	utilities/ovs-pki.in \
+	utilities/ovs-qemu-ctl \
 	utilities/ovs-save \
 	utilities/ovs-tcpdump.in \
 	utilities/ovs-tcpundump.in \
 	utilities/ovs-test.in \
 	utilities/ovs-vlan-test.in \
-	utilities/ovs-vsctl-bashcomp.bash \
-	utilities/checkpatch.py
+	utilities/ovs-vsctl-bashcomp.bash
 MAN_ROOTS += \
 	utilities/ovs-appctl.8.in \
 	utilities/ovs-testcontroller.8.in \
