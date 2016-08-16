@@ -240,6 +240,7 @@ main(int argc, char *argv[])
     service_start(&argc, &argv);
     fatal_ignore_sigpipe();
     process_init();
+    replication_init();
 
     parse_options(&argc, &argv, &remotes, &unixctl_path, &run_command);
     daemon_become_new_user(false);
@@ -385,7 +386,7 @@ main(int argc, char *argv[])
     sset_destroy(&remotes);
     sset_destroy(&db_filenames);
     unixctl_server_destroy(unixctl);
-    destroy_active_server();
+    replication_destroy();
 
     if (run_process && process_exited(run_process)) {
         int status = process_status(run_process);
@@ -1069,13 +1070,7 @@ ovsdb_server_get_active_ovsdb_server(struct unixctl_conn *conn,
                                      const char *argv[] OVS_UNUSED,
                                      void *arg_ OVS_UNUSED)
 {
-    struct ds s;
-    ds_init(&s);
-
-    ds_put_format(&s, "%s\n", get_active_ovsdb_server());
-
-    unixctl_command_reply(conn, ds_cstr(&s));
-    ds_destroy(&s);
+    unixctl_command_reply(conn, get_active_ovsdb_server());
 }
 
 static void
@@ -1084,10 +1079,10 @@ ovsdb_server_connect_active_ovsdb_server(struct unixctl_conn *conn,
                                          const char *argv[] OVS_UNUSED,
                                          void *arg_ OVS_UNUSED)
 {
-    if (!is_backup_server) {
+    if (is_backup_server) {
         replication_init();
-        is_backup_server = true;
     }
+    is_backup_server = true;
     unixctl_command_reply(conn, NULL);
 }
 
@@ -1109,8 +1104,15 @@ ovsdb_server_set_sync_excluded_tables(struct unixctl_conn *conn,
                                       const char *argv[],
                                       void *arg_ OVS_UNUSED)
 {
-    set_tables_blacklist(argv[1]);
-    unixctl_command_reply(conn, NULL);
+    char *err = set_blacklist_tables(argv[1], true);
+
+    if (!err) {
+        if (is_backup_server) {
+            replication_init();
+        }
+        set_blacklist_tables(argv[1], false);
+    }
+    unixctl_command_reply(conn, err);
 }
 
 static void
@@ -1119,17 +1121,7 @@ ovsdb_server_get_sync_excluded_tables(struct unixctl_conn *conn,
                                  const char *argv[] OVS_UNUSED,
                                  void *arg_ OVS_UNUSED)
 {
-    struct ds s;
-    const char *table_name;
-    struct sset table_blacklist = get_tables_blacklist();
-
-    ds_init(&s);
-
-    SSET_FOR_EACH(table_name, &table_blacklist) {
-        ds_put_format(&s, "%s\n", table_name);
-    }
-
-    unixctl_command_reply(conn, ds_cstr(&s));
+    unixctl_command_reply(conn, get_blacklist_tables());
 }
 
 static void
@@ -1468,9 +1460,14 @@ parse_options(int *argcp, char **argvp[],
             is_backup_server = true;
             break;
 
-        case OPT_SYNC_EXCLUDE:
-            set_tables_blacklist(optarg);
+        case OPT_SYNC_EXCLUDE: {
+            char *err = set_blacklist_tables(optarg, false);
+            if (err) {
+                printf("%s\n", err);
+                exit(EXIT_FAILURE);
+            }
             break;
+        }
 
         case '?':
             exit(EXIT_FAILURE);

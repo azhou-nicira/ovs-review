@@ -18,7 +18,9 @@
 #ifndef REPLICATION_H
 #define REPLICATION_H 1
 
+#include <stdbool.h>
 #include "openvswitch/shash.h"
+
 
 struct db {
     /* Initialized in main(). */
@@ -30,16 +32,19 @@ struct db {
     struct ovsdb_txn *txn;
 };
 
+/* Functions to be called from the main loop. */
 void replication_init(void);
 void replication_run(struct shash *dbs);
 void replication_wait(void);
+void replication_destroy(void);
+void replication_usage(void);
+
+/* Unixctl APIs */
 void set_active_ovsdb_server(const char *remote_server);
 const char *get_active_ovsdb_server(void);
-void set_tables_blacklist(const char *blacklist);
-struct sset get_tables_blacklist(void);
+char *set_blacklist_tables(const char *blacklist, bool dryrun);
+char *get_blacklist_tables(void);
 void disconnect_active_server(void);
-void destroy_active_server(void);
 const struct db *find_db(const struct shash *all_dbs, const char *db_name);
-void replication_usage(void);
 
 #endif /* ovsdb/replication.h */
