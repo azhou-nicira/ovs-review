@@ -37,7 +37,7 @@
 
 VLOG_DEFINE_THIS_MODULE(replication)
 
-static char *active_ovsdb_server;
+static char *sync_from;
 static struct jsonrpc_session *session = NULL;
 static unsigned int session_seqno = UINT_MAX;
 
@@ -109,8 +109,12 @@ static struct ovsdb* find_db(const char *db_name);
 
 
 void
-replication_init(void)
+replication_init(const char *sync_from_, const char *exclude_tables)
 {
+    free(sync_from);
+    sync_from = xstrdup(sync_from_);
+    set_blacklist_tables(exclude_tables, false);
+
     shash_destroy(replication_dbs);
     replication_dbs = NULL;
 
@@ -119,7 +123,7 @@ replication_init(void)
         jsonrpc_session_close(session);
     }
 
-    session = jsonrpc_session_open(active_ovsdb_server, true);
+    session = jsonrpc_session_open(sync_from, true);
     session_seqno = UINT_MAX;
     state = RPL_S_INIT;
 }
@@ -161,6 +165,7 @@ replication_run(void)
             replication_dbs = replication_db_clone(&local_dbs);
 
             state = RPL_S_DB_REQUESTED;
+            VLOG_DBG("Send list_dbs request");
         }
 
         msg = jsonrpc_session_recv(session);
@@ -216,6 +221,7 @@ replication_run(void)
                             }
                         }
                     }
+                    VLOG_DBG("Send schema requests");
                     state = RPL_S_SCHEMA_REQUESTED;
                 }
                 break;
@@ -270,6 +276,7 @@ replication_run(void)
 
                             request_ids_add(request->id, db);
                             jsonrpc_session_send(session, request);
+                            VLOG_DBG("Send monitor requests");
                             state = RPL_S_MONITOR_REQUESTED;
                         }
                     }
@@ -288,6 +295,7 @@ replication_run(void)
                     /* Transition to replicating state after receving
                      * all replies of "monitor" requests. */
                     if (hmap_is_empty(&request_ids)) {
+                        VLOG_DBG("Listening to monitor updates");
                         state = RPL_S_REPLICATING;
                     }
                 }
@@ -315,18 +323,6 @@ replication_wait(void)
         jsonrpc_session_wait(session);
         jsonrpc_session_recv_wait(session);
     }
-}
-
-void
-set_active_ovsdb_server(const char *active_server)
-{
-    active_ovsdb_server = nullable_xstrdup(active_server);
-}
-
-const char *
-get_active_ovsdb_server(void)
-{
-    return active_ovsdb_server;
 }
 
 /* Parse 'blacklist' to rebuild 'blacklist_tables'.
@@ -460,9 +456,9 @@ replication_destroy(void)
     blacklist_tables_clear();
     shash_destroy(&blacklist_tables);
 
-    if (active_ovsdb_server) {
-        free(active_ovsdb_server);
-        active_ovsdb_server = NULL;
+    if (sync_from) {
+        free(sync_from);
+        sync_from = NULL;
     }
 
     request_ids_destroy();
@@ -862,12 +858,59 @@ replication_get_last_error(void)
     return err;
 }
 
+char *
+replication_status(void)
+{
+    bool alive = session && jsonrpc_session_is_alive(session);
+    struct ds ds = DS_EMPTY_INITIALIZER;
+
+    if (alive) {
+        switch(state) {
+        case RPL_S_INIT:
+        case RPL_S_DB_REQUESTED:
+        case RPL_S_SCHEMA_REQUESTED:
+        case RPL_S_MONITOR_REQUESTED:
+            ds_put_format(&ds, "connecting: %s", sync_from);
+            break;
+        case RPL_S_REPLICATING: {
+            struct shash_node *node;
+
+            ds_put_format(&ds, "replicating: %s\n", sync_from);
+            ds_put_cstr(&ds, "database:");
+            SHASH_FOR_EACH (node, replication_dbs) {
+                ds_put_format(&ds, " %s,", node->name);
+            }
+            ds_chomp(&ds, ',');
+
+            if (!shash_is_empty(&blacklist_tables)) {
+                ds_put_char(&ds, '\n');
+                ds_put_cstr(&ds, "exclude: ");
+                ds_put_and_free_cstr(&ds, get_blacklist_tables());
+            }
+            break;
+        }
+        case RPL_S_ERR:
+            ds_put_format(&ds, "Replication to (%s) failed\n", sync_from);
+            break;
+        default:
+            OVS_NOT_REACHED();
+            break;
+        }
+    } else {
+        ds_put_format(&ds, "not connected to %s", sync_from);
+    }
+    return ds_steal_cstr(&ds);
+}
+
 void
 replication_usage(void)
 {
     printf("\n\
 Syncing options:\n\
   --sync-from=SERVER      sync DATABASE from active SERVER\n\
+                          start in backup mode, except when\n\
+                          --no-sync is also specified\n\
   --sync-exclude-tables=DB:TABLE,...\n\
-                          exclude the TABLE in DB from syncing\n");
+                          exclude the TABLE in DB from syncing\n\
+  --no-sync               start in active mode\n");
 }
