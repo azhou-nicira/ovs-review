@@ -243,14 +243,36 @@ EXTRA_DIST += tests/run-ryu
 
 # Run kmod tests. Assume kernel modules has been installed or linked into the kernel
 check-kernel: all tests/atconfig tests/atlocal $(SYSTEM_KMOD_TESTSUITE)
+	$(MAKE) check-kenrel-nodep
+
+check-kernel-nodep:
 	set $(SHELL) '$(SYSTEM_KMOD_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' $(TESTSUITEFLAGS) -j1; \
 	"$$@" || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
 
 # Testing the out of tree Kernel module
 check-kmod: all tests/atconfig tests/atlocal $(SYSTEM_KMOD_TESTSUITE)
+	$(MAKE) check-kmod-nodep
+
+check-kmod-nodep:
 	$(MAKE) modules_install
 	modprobe -r -a vport-geneve vport-gre vport-lisp vport-stt vport-vxlan openvswitch
-	$(MAKE) check-kernel
+	$(MAKE) check-kernel-nodep
+
+# Using QEMU to test the out of tree kernel module. It will launch a
+# qemu proces and runs 'make check-kmod-nodep' inside the VM, using
+# the binaries built on the host.
+#
+# Prerequisites:
+#  - Linux system images, customized for OVS testing has been downloaded
+#    and installed.
+#  - The source tree has been configured with '--with-linux' pointing to
+#    the "build" directory of the image.
+#  - The QEMU pacckage is installed.
+#
+check-kmod-qemu: all tests/atconfig tests/atlocal $(SYSTEM_KMOD_TESTSUITE)
+	utilities/ovs-qemu-ctl launch --wait
+	utilities/ovs-qemu-ctl ssh sudo /etc/mount-host.sh `pwd`
+	utilities/ovs-qemu-ctl ssh "(cd `pwd`; sudo make check-kmod-nodep)"
 
 check-system-userspace: all tests/atconfig tests/atlocal $(SYSTEM_USERSPACE_TESTSUITE)
 	set $(SHELL) '$(SYSTEM_USERSPACE_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)' $(TESTSUITEFLAGS) -j1; \
