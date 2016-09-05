@@ -192,8 +192,11 @@ write_files:
         fi
 
 runcmd:
-    - apt-get --purge autoremove openvswitch-switch
     - (cd /lib/modules; find . -name openvswitch.ko -delete)
+    - apt-get --purge autoremove apparmor
+    - apt-get --purge autoremove cloud-init
+    - apt-get --purge autoremove landscape-client
+    - apt-get --purge autoremove cryptsetup
 
 packages:
     -  gcc
