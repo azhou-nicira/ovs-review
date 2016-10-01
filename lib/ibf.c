@@ -1,9 +1,9 @@
 
 #include <config.h>
 
-#include "ibf.h"
 #include "hash.h"
-
+#include "ibf.h"
+#include "openvswitch/json.h"
 
 #define HASH_COUNT (3)
 /* 'HASH_COUNT' number random 'basis' of hash function, used to
@@ -21,7 +21,6 @@ ibf_hashsum_hash(const uint8_t *key, const size_t key_size)
     return hash_bytes(key, key_size, hashsum_basis);
 }
 
-struct ibf;
 struct ibf_node {
     struct ibf *ibf;       /* The ibf it belongs to. */
     int count;
@@ -42,7 +41,7 @@ struct ibf {
      size_t n_nodes;             /* Size of of 'table' array, drived
                                     from the 'n_keys' arguments of
                                     ibf_create().    */
-     struct ibf_node* nodes;
+     struct ibf_node *nodes;
 };
 
 static struct ibf_node *ibf_node(const struct ibf *, size_t index);
@@ -234,4 +233,134 @@ ibf_node_is_pure(struct ibf_node *node)
 {
     uint32_t hash = ibf_hashsum_hash(node->keysum, ibf_key_size(node));
     return (node->count == 1 || node->count == -1) && hash == node->hashsum;
+}
+
+static struct json *
+ibf_node_to_json(struct ibf_node *node)
+{
+    struct json **keysum = xmalloc(ibf_key_size(node) * sizeof **keysum);
+    struct json *json = json_object_create();
+    size_t i;
+
+    for (i = 0; i< ibf_key_size(node); i++) {
+        keysum[i] = json_integer_create(node->keysum[i]);
+    }
+
+    json_object_put(json, "keysum",
+                    json_array_create(keysum, ibf_key_size(node)));
+    json_object_put(json, "count", json_integer_create(node->count));
+    json_object_put(json, "hashsum", json_integer_create(node->hashsum));
+
+    return json;
+}
+
+struct json *
+ibf_to_json(struct ibf *ibf)
+{
+    struct json **nodes = xmalloc(ibf->n_nodes * sizeof **nodes);
+    struct json *json = json_object_create();
+    size_t i;
+
+    for (i = 0; i< ibf->n_nodes; i++) {
+        nodes[i] = ibf_node_to_json(&ibf->nodes[i]);
+    }
+
+    json_object_put(json, "key_size", json_integer_create(ibf->key_size));
+    json_object_put(json, "nodes", json_array_create(nodes, ibf->n_nodes));
+
+    return json;
+}
+
+static bool
+ibf_node_from_json(struct ibf_node *node, const struct json *ibf_node_json,
+                   struct ibf *ibf)
+{
+    struct json *json;
+
+    if (ibf_node_json->type != JSON_OBJECT) {
+        return false;
+    }
+
+    json = shash_find_data(json_object(ibf_node_json), "count");
+    if (json->type != JSON_INTEGER) {
+        return false;
+    } else {
+        node->count = json_integer(json);
+    }
+
+    json = shash_find_data(json_object(ibf_node_json), "hashsum");
+    if (json->type != JSON_INTEGER) {
+        return false;
+    } else {
+        node->hashsum = json_integer(json);
+    }
+
+    json = shash_find_data(json_object(ibf_node_json), "keysum");
+
+    if (json->type != JSON_ARRAY) {
+        return false;
+    }
+
+    if (ibf->key_size != json_array(json)->n) {
+        return false;
+    }
+
+    size_t i;
+    struct json_array *json_keysum = json_array(json);
+    for (i = 0; i < ibf->key_size; i++) {
+        if (json_keysum->elems[i]->type != JSON_INTEGER) {
+            return false;
+        }
+        node->keysum[i] = json_integer(json_keysum->elems[i]);
+    }
+
+    node->ibf = ibf;
+
+    return true;
+}
+
+struct ibf *
+ibf_from_json(struct json *ibf_json)
+{
+    struct json *json;
+
+    if (ibf_json->type != JSON_OBJECT) {
+        return NULL;
+    }
+
+    struct ibf *ibf;
+    ibf = xzalloc(sizeof *ibf);
+
+    json = shash_find_data(json_object(ibf_json), "key_size");
+    if (json->type != JSON_INTEGER) {
+        goto error;
+    }
+
+    ibf->key_size = json_integer(json);
+    json = shash_find_data(json_object(ibf_json), "nodes");
+    if (json->type != JSON_ARRAY) {
+        goto error;
+    }
+
+    struct json_array *nodes = json_array(json);
+    size_t i;
+
+    ibf->n_nodes = nodes->n;
+    ibf->nodes = xmalloc(nodes->n * ibf_node_size(ibf->key_size));
+
+    for (i = 0; i < ibf->n_nodes; i++) {
+        struct ibf_node *node = ibf_node(ibf, i);
+
+        if (!ibf_node_from_json(node, nodes->elems[i], ibf)) {
+            goto error;
+        }
+    }
+
+    return ibf;
+
+error:
+    free(ibf->nodes);
+    free(ibf);
+
+    return NULL;
 }

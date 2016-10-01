@@ -22,10 +22,14 @@
 #include "openvswitch/ofpbuf.h"
 
 struct ibf;
+struct json;
 
 struct ibf *ibf_create(size_t n_bytes, size_t n_elems);
 void ibf_add_key(struct ibf *ibf, const uint8_t *element);
 void ibf_substract(struct ibf *a, const struct ibf *b);
 bool ibf_decode(struct ibf *ibf, struct ofpbuf *added, struct ofpbuf *deleted);
+
+struct json *ibf_to_json(struct ibf *);
+struct ibf *ibf_from_json(struct json *);
 
 #endif
