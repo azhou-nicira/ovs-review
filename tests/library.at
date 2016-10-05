@@ -21,6 +21,12 @@ AT_CHECK([ovstest test-hmap], [0], [............
 ])
 AT_CLEANUP
 
+AT_SETUP([inverted bloom filter])
+AT_KEYWORDS([ibf])
+AT_CHECK([ovstest test-ibf], [0], [...
+])
+AT_CLEANUP
+
 AT_SETUP([hash index])
 AT_KEYWORDS([hindex])
 AT_CHECK([ovstest test-hindex], [0], [.....................

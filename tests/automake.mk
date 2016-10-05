@@ -336,6 +336,7 @@ tests_ovstest_SOURCES = \
 	tests/test-heap.c \
 	tests/test-hindex.c \
 	tests/test-hmap.c \
+	tests/test-ibf.c \
 	tests/test-json.c \
 	tests/test-jsonrpc.c \
 	tests/test-list.c \
