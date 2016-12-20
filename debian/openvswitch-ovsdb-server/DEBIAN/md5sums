@@ -1,0 +1,5 @@
+bf6bc381186cbb4b4965f154cdc84c90  usr/bin/ovsdb-tool
+ff3c498ff3d42dc09ee6cee6a307570c  usr/sbin/ovsdb-server
+c20ef3f964037d89954b263182f1e62b  usr/share/doc/openvswitch-ovsdb-server/changelog.Debian.gz
+af094cf34e33741c3c064d38fec84b1f  usr/share/doc/openvswitch-ovsdb-server/copyright
+f3c3d354d62fb462866ec997aae8f72b  usr/share/man/man1/ovsdb-server.1.gz

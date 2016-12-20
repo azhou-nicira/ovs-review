@@ -76,12 +76,23 @@ Description: Open vSwitch common components
  openvswitch-common provides components required by both openvswitch-switch
  and openvswitch-testcontroller.
 
+Package: openvswitch-ovsdb-server
+Architecture: linux-any
+Depends: openvswitch-common (= ${binary:Version}),
+         ${misc:Depends},
+         ${python:Depends},
+         ${shlibs:Depends}
+Replaces: openvswitch-switch (<< 2.5.0)
+Breaks: openvswitch-switch (<< 2.5.0)
+Description: OVSDB server implementations
+ OVSDB is great.
+
 Package: openvswitch-switch
 Architecture: linux-any
 Suggests: openvswitch-datapath-module
 Depends: kmod | module-init-tools,
          netbase,
-         openvswitch-common (= ${binary:Version}),
+         openvswitch-ovsdb-server (>= ${binary:Version}),
          procps,
          python-argparse,
          uuid-runtime,

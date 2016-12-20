@@ -1,0 +1,14 @@
+Package: openvswitch-ovsdb-server
+Source: openvswitch
+Version: 2.6.90-1
+Architecture: amd64
+Maintainer: Open vSwitch developers <dev@openvswitch.org>
+Installed-Size: 107
+Depends: openvswitch-common (= 2.6.90-1), libc6 (>= 2.4)
+Breaks: openvswitch-switch (<< 2.5.0)
+Replaces: openvswitch-switch (<< 2.5.0)
+Section: net
+Priority: extra
+Homepage: http://openvswitch.org/
+Description: OVSDB server implementations
+ OVSDB is great.

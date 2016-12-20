@@ -31,6 +31,8 @@ EXTRA_DIST += \
 	debian/openvswitch-switch.postinst \
 	debian/openvswitch-switch.postrm \
 	debian/openvswitch-switch.template \
+	debian/openvswitch-ovsdb-server.install \
+	debian/openvswitch-ovsdb-server.manpages \
 	debian/openvswitch-switch.links \
 	debian/openvswitch-test.dirs \
 	debian/openvswitch-test.install \

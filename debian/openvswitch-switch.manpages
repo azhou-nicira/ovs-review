@@ -1,4 +1,3 @@
-ovsdb/ovsdb-server.1
 utilities/ovs-ctl.8
 utilities/ovs-dpctl-top.8
 utilities/ovs-dpctl.8
