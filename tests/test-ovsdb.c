@@ -2282,7 +2282,12 @@ update_conditions(struct ovsdb_idl *idl, char *commands)
                 }
             }
         }
-        ovsdb_idl_set_condition(idl, tc, &cond);
+
+        uint64_t seqno;
+        seqno = ovsdb_idl_set_condition(idl, tc, &cond);
+        if (seqno == UINT_MAX) {
+            ovs_fatal(0, "condition unchanged");
+        }
         ovsdb_idl_condition_destroy(&cond);
         json_destroy(json);
     }
