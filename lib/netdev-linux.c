@@ -1104,7 +1104,7 @@ netdev_linux_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet_batch *batch)
 {
     struct netdev_rxq_linux *rx = netdev_rxq_linux_cast(rxq_);
     struct netdev *netdev = rx->up.netdev;
-    struct dp_packet *buffer;
+    struct dp_packet *packet;
     ssize_t retval;
     int mtu;
 
@@ -1112,21 +1112,20 @@ netdev_linux_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet_batch *batch)
         mtu = ETH_PAYLOAD_MAX;
     }
 
-    buffer = dp_packet_new_with_headroom(VLAN_ETH_HEADER_LEN + mtu,
+    packet = dp_packet_new_with_headroom(VLAN_ETH_HEADER_LEN + mtu,
                                            DP_NETDEV_HEADROOM);
     retval = (rx->is_tap
-              ? netdev_linux_rxq_recv_tap(rx->fd, buffer)
-              : netdev_linux_rxq_recv_sock(rx->fd, buffer));
+              ? netdev_linux_rxq_recv_tap(rx->fd, packet)
+              : netdev_linux_rxq_recv_sock(rx->fd, packet));
 
     if (retval) {
         if (retval != EAGAIN && retval != EMSGSIZE) {
             VLOG_WARN_RL(&rl, "error receiving Ethernet packet on %s: %s",
                          netdev_rxq_get_name(rxq_), ovs_strerror(errno));
         }
-        dp_packet_delete(buffer);
+        dp_packet_delete(packet);
     } else {
-        batch->packets[0] = buffer;
-        batch->count = 1;
+        packet_batch_init_packet(batch, packet);
     }
 
     return retval;
@@ -1171,17 +1170,17 @@ netdev_linux_send(struct netdev *netdev_, int qid OVS_UNUSED,
                   struct dp_packet_batch *batch, bool may_steal,
                   bool concurrent_txq OVS_UNUSED)
 {
-    int i;
+    struct dp_packet *packet;
     int error = 0;
+    int i;
 
-    /* 'i' is incremented only if there's no error */
-    for (i = 0; i < batch->count;) {
-        const void *data = dp_packet_data(batch->packets[i]);
-        size_t size = dp_packet_size(batch->packets[i]);
+    DP_PACKET_BATCH_FOR_EACH(i, packet, batch) {
+        const void *data = dp_packet_data(packet);
+        size_t size = dp_packet_size(packet);
         ssize_t retval;
 
         /* Truncate the packet if it is configured. */
-        size -= dp_packet_get_cutlen(batch->packets[i]);
+        size -= dp_packet_get_cutlen(packet);
 
         if (!is_tap_netdev(netdev_)) {
             /* Use our AF_PACKET socket to send to this device. */
@@ -1252,9 +1251,6 @@ netdev_linux_send(struct netdev *netdev_, int qid OVS_UNUSED,
             error = EMSGSIZE;
             break;
         }
-
-        /* Process the next packet in the batch */
-        i++;
     }
 
     dp_packet_delete_batch(batch, may_steal);

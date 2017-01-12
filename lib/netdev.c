@@ -637,7 +637,7 @@ netdev_rxq_recv(struct netdev_rxq *rx, struct dp_packet_batch *batch)
     if (!retval) {
         COVERAGE_INC(netdev_received);
     } else {
-        batch->count = 0;
+        batch->burst = 0;
     }
     return retval;
 }
@@ -735,26 +735,29 @@ netdev_send(struct netdev *netdev, int qid, struct dp_packet_batch *batch,
 void
 netdev_pop_header(struct netdev *netdev, struct dp_packet_batch *batch)
 {
-    int i, n_cnt = 0;
-    struct dp_packet **buffers = batch->packets;
+    struct dp_packet *packet;
+    int i;
 
     if (!netdev->netdev_class->pop_header) {
         dp_packet_delete_batch(batch, true);
-        batch->count = 0;
         return;
     }
 
-    for (i = 0; i < batch->count; i++) {
-        buffers[i] = netdev->netdev_class->pop_header(buffers[i]);
-        if (buffers[i]) {
+    DP_PACKET_BATCH_FOR_EACH(i, packet, batch) {
+        struct dp_packet *pop;
+        bool trigger = false;
+
+        pop = netdev->netdev_class->pop_header(packet);
+        if (pop) {
             /* Reset the checksum offload flags if present, to avoid wrong
              * interpretation in the further packet processing when
              * recirculated.*/
-            reset_dp_packet_checksum_ol_flags(buffers[i]);
-            buffers[n_cnt++] = buffers[i];
+            reset_dp_packet_checksum_ol_flags(pop);
+            dp_packet_batch_rewrite_open(batch, &trigger);
+            dp_packet_batch_rewrite(batch, pop);
         }
     }
-    batch->count = n_cnt;
+    dp_packet_batch_rewrite_close(batch);
 }
 
 void
@@ -786,15 +789,16 @@ netdev_push_header(const struct netdev *netdev,
                    struct dp_packet_batch *batch,
                    const struct ovs_action_push_tnl *data)
 {
+    struct dp_packet *packet;
     int i;
 
     if (!netdev->netdev_class->push_header) {
         return -EINVAL;
     }
 
-    for (i = 0; i < batch->count; i++) {
-        netdev->netdev_class->push_header(batch->packets[i], data);
-        pkt_metadata_init(&batch->packets[i]->md, u32_to_odp(data->out_port));
+    DP_PACKET_BATCH_FOR_EACH(i, packet, batch) {
+        netdev->netdev_class->push_header(packet, data);
+        pkt_metadata_init(&packet->md, u32_to_odp(data->out_port));
     }
 
     return 0;

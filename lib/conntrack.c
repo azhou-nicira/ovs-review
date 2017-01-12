@@ -275,10 +275,8 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
                   const struct ovs_key_ct_labels *setlabel,
                   const char *helper)
 {
-    struct dp_packet **pkts = pkt_batch->packets;
-    size_t cnt = pkt_batch->count;
 #if !defined(__CHECKER__) && !defined(_WIN32)
-    const size_t KEY_ARRAY_SIZE = cnt;
+    const size_t KEY_ARRAY_SIZE = pkt_batch->burst;
 #else
     enum { KEY_ARRAY_SIZE = NETDEV_MAX_BURST };
 #endif
@@ -302,11 +300,13 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
     }
 
     memset(bucket_list, INT8_C(-1), sizeof bucket_list);
-    for (i = 0; i < cnt; i++) {
+
+    struct dp_packet *p;
+    DP_PACKET_BATCH_FOR_EACH(i, p, pkt_batch) {
         unsigned bucket;
 
-        if (!conn_key_extract(ct, pkts[i], dl_type, &ctxs[i], zone)) {
-            write_ct_md(pkts[i], CS_INVALID, zone, 0, OVS_U128_ZERO);
+        if (!conn_key_extract(ct, p, dl_type, &ctxs[i], zone)) {
+            write_ct_md(p, CS_INVALID, zone, 0, OVS_U128_ZERO);
             continue;
         }
 
@@ -330,17 +330,22 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
 
         ULLONG_FOR_EACH_1(j, arr[i].maps) {
             struct conn *conn;
+            struct dp_packet *packet;
 
             conn_key_lookup(ctb, &ctxs[j], now);
 
-            conn = process_one(ct, pkts[j], &ctxs[j], zone, commit, now);
+            packet = pkt_batch->packets[j];
+            if (!packet) {
+                continue;
+            }
+            conn = process_one(ct, packet, &ctxs[j], zone, commit, now);
 
             if (conn && setmark) {
-                set_mark(pkts[j], conn, setmark[0], setmark[1]);
+                set_mark(packet, conn, setmark[0], setmark[1]);
             }
 
             if (conn && setlabel) {
-                set_label(pkts[j], conn, &setlabel[0], &setlabel[1]);
+                set_label(packet, conn, &setlabel[0], &setlabel[1]);
             }
         }
         ct_lock_unlock(&ctb->lock);

@@ -3915,7 +3915,7 @@ packet_batch_per_flow_update(struct packet_batch_per_flow *batch,
 {
     batch->byte_count += dp_packet_size(packet);
     batch->tcp_flags |= miniflow_get_tcp_flags(mf);
-    batch->array.packets[batch->array.count++] = packet;
+    batch->array.packets[batch->array.burst++] = packet;
 }
 
 static inline void
@@ -3938,7 +3938,7 @@ packet_batch_per_flow_execute(struct packet_batch_per_flow *batch,
     struct dp_netdev_actions *actions;
     struct dp_netdev_flow *flow = batch->flow;
 
-    dp_netdev_flow_used(flow, batch->array.count, batch->byte_count,
+    dp_netdev_flow_used(flow, batch->array.burst, batch->byte_count,
                         batch->tcp_flags, now);
 
     actions = dp_netdev_flow_get_actions(flow);
@@ -3974,8 +3974,8 @@ dp_netdev_queue_batches(struct dp_packet *pkt,
  * initialized by this function using 'port_no'.
  */
 static inline size_t
-emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet_batch *packets_,
-               struct netdev_flow_key *keys,
+emc_processing(struct dp_netdev_pmd_thread *pmd,
+               struct dp_packet_batch *packets_, struct netdev_flow_key *keys,
                struct packet_batch_per_flow batches[], size_t *n_batches,
                bool md_is_valid, odp_port_t port_no)
 {
@@ -3983,14 +3983,14 @@ emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet_batch *packets
     struct netdev_flow_key *key = &keys[0];
     size_t i, n_missed = 0, n_dropped = 0;
     struct dp_packet **packets = packets_->packets;
-    int cnt = packets_->count;
+    int cnt = packets_->burst;
 
-    for (i = 0; i < cnt; i++) {
+    struct dp_packet *packet;
+    DP_PACKET_BATCH_FOR_EACH(i, packet, packets_) {
         struct dp_netdev_flow *flow;
-        struct dp_packet *packet = packets[i];
 
         if (OVS_UNLIKELY(dp_packet_size(packet) < ETH_HEADER_LEN)) {
-            dp_packet_delete(packet);
+            dp_packet_batch_drop_packet(packets_, i);
             n_dropped++;
             continue;
         }
@@ -4023,6 +4023,9 @@ emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet_batch *packets
         }
     }
 
+    /* Now 'packets_' only contains packets that missed the emc cache,
+     * from the beginning of 'packets'.   */
+    packets_->burst = n_missed;
     dp_netdev_count_packet(pmd, DP_STAT_EXACT_HIT, cnt - n_dropped - n_missed);
 
     return n_missed;
@@ -4104,14 +4107,14 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
                      odp_port_t in_port,
                      long long now)
 {
-    int cnt = packets_->count;
+    size_t cnt = packets_->burst;
 #if !defined(__CHECKER__) && !defined(_WIN32)
     const size_t PKT_ARRAY_SIZE = cnt;
 #else
     /* Sparse or MSVC doesn't like variable length array. */
     enum { PKT_ARRAY_SIZE = NETDEV_MAX_BURST };
 #endif
-    struct dp_packet **packets = packets_->packets;
+    struct dp_packet *packet;
     struct dpcls *cls;
     struct dpcls_rule *rules[PKT_ARRAY_SIZE];
     struct dp_netdev *dp = pmd->dp;
@@ -4121,7 +4124,7 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
     bool any_miss;
     size_t i;
 
-    for (i = 0; i < cnt; i++) {
+    DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
         /* Key length is needed in all the cases, hash computed on demand. */
         keys[i].len = netdev_flow_key_size(miniflow_n_values(&keys[i].mf));
     }
@@ -4140,7 +4143,7 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
         ofpbuf_use_stub(&actions, actions_stub, sizeof actions_stub);
         ofpbuf_use_stub(&put_actions, slow_stub, sizeof slow_stub);
 
-        for (i = 0; i < cnt; i++) {
+        DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
             struct dp_netdev_flow *netdev_flow;
 
             if (OVS_LIKELY(rules[i])) {
@@ -4159,7 +4162,7 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
             }
 
             miss_cnt++;
-            handle_packet_upcall(pmd, packets[i], &keys[i], &actions,
+            handle_packet_upcall(pmd, packet, &keys[i], &actions,
                                  &put_actions, &lost_cnt, now);
         }
 
@@ -4168,17 +4171,16 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
         fat_rwlock_unlock(&dp->upcall_rwlock);
         dp_netdev_count_packet(pmd, DP_STAT_LOST, lost_cnt);
     } else if (OVS_UNLIKELY(any_miss)) {
-        for (i = 0; i < cnt; i++) {
+        DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
             if (OVS_UNLIKELY(!rules[i])) {
-                dp_packet_delete(packets[i]);
+                dp_packet_batch_drop_packet(packets_, i);
                 lost_cnt++;
                 miss_cnt++;
             }
         }
     }
 
-    for (i = 0; i < cnt; i++) {
-        struct dp_packet *packet = packets[i];
+    DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
         struct dp_netdev_flow *flow;
 
         if (OVS_UNLIKELY(!rules[i])) {
@@ -4208,7 +4210,7 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
                   struct dp_packet_batch *packets,
                   bool md_is_valid, odp_port_t port_no)
 {
-    int cnt = packets->count;
+    int cnt = packets->burst;
 #if !defined(__CHECKER__) && !defined(_WIN32)
     const size_t PKT_ARRAY_SIZE = cnt;
 #else
@@ -4218,17 +4220,18 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
     OVS_ALIGNED_VAR(CACHE_LINE_SIZE) struct netdev_flow_key keys[PKT_ARRAY_SIZE];
     struct packet_batch_per_flow batches[PKT_ARRAY_SIZE];
     long long now = time_msec();
-    size_t newcnt, n_batches, i;
-    odp_port_t in_port;
+    size_t n_batches, i;
 
     n_batches = 0;
-    newcnt = emc_processing(pmd, packets, keys, batches, &n_batches,
-                            md_is_valid, port_no);
-    if (OVS_UNLIKELY(newcnt)) {
-        packets->count = newcnt;
+    if (OVS_UNLIKELY(emc_processing(pmd, packets, keys, batches,
+                                    &n_batches, md_is_valid, port_no))) {
         /* Get ingress port from first packet's metadata. */
-        in_port = packets->packets[0]->md.in_port.odp_port;
-        fast_path_processing(pmd, packets, keys, batches, &n_batches, in_port, now);
+        odp_port_t in_port;
+        struct dp_packet *packet = dp_packet_batch_first_packet(packets);
+
+        in_port = packet->md.in_port.odp_port;
+        fast_path_processing(pmd, packets, keys, batches, &n_batches,
+                             in_port, now);
     }
 
     /* All the flow batches need to be reset before any call to
@@ -4473,7 +4476,6 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
 
     case OVS_ACTION_ATTR_TUNNEL_POP:
         if (*depth < MAX_RECIRC_DEPTH) {
-            struct dp_packet_batch *orig_packets_ = packets_;
             odp_port_t portno = nl_attr_get_odp_port(a);
 
             p = pmd_tx_port_cache_lookup(pmd, portno);
@@ -4483,24 +4485,23 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
 
                 if (!may_steal) {
                     dp_packet_batch_clone(&tnl_pkt, packets_);
+                    dp_packet_batch_reset_cutlen(packets_);
                     packets_ = &tnl_pkt;
-                    dp_packet_batch_reset_cutlen(orig_packets_);
                 }
 
                 dp_packet_batch_apply_cutlen(packets_);
 
                 netdev_pop_header(p->port->netdev, packets_);
-                if (!packets_->count) {
-                    return;
-                }
+                if (!dp_packet_batch_is_empty(packets_)) {
+                    struct dp_packet *packet;
+                    DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
+                        packet->md.in_port.odp_port = portno;
+                    }
 
-                for (i = 0; i < packets_->count; i++) {
-                    packets_->packets[i]->md.in_port.odp_port = portno;
+                    (*depth)++;
+                    dp_netdev_recirculate(pmd, packets_);
+                    (*depth)--;
                 }
-
-                (*depth)++;
-                dp_netdev_recirculate(pmd, packets_);
-                (*depth)--;
                 return;
             }
         }
@@ -4508,14 +4509,12 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
 
     case OVS_ACTION_ATTR_USERSPACE:
         if (!fat_rwlock_tryrdlock(&dp->upcall_rwlock)) {
-            struct dp_packet_batch *orig_packets_ = packets_;
-            struct dp_packet **packets = packets_->packets;
             const struct nlattr *userdata;
             struct dp_packet_batch usr_pkt;
+            struct dp_packet_batch *clone = NULL;
             struct ofpbuf actions;
             struct flow flow;
             ovs_u128 ufid;
-            bool clone = false;
             int i;
 
             userdata = nl_attr_find_nested(a, OVS_USERSPACE_ATTR_USERDATA);
@@ -4524,25 +4523,22 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
             if (packets_->trunc) {
                 if (!may_steal) {
                     dp_packet_batch_clone(&usr_pkt, packets_);
-                    packets_ = &usr_pkt;
-                    packets = packets_->packets;
-                    clone = true;
-                    dp_packet_batch_reset_cutlen(orig_packets_);
+                    dp_packet_batch_reset_cutlen(packets_);
+                    clone = packets_ = &usr_pkt;
                 }
 
                 dp_packet_batch_apply_cutlen(packets_);
             }
 
-            for (i = 0; i < packets_->count; i++) {
-                flow_extract(packets[i], &flow);
+            struct dp_packet *packet;
+            DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
+                flow_extract(packet, &flow);
                 dpif_flow_hash(dp->dpif, &flow, sizeof flow, &ufid);
-                dp_execute_userspace_action(pmd, packets[i], may_steal, &flow,
+                dp_execute_userspace_action(pmd, packet, may_steal, &flow,
                                             &ufid, &actions, userdata, now);
             }
 
-            if (clone) {
-                dp_packet_delete_batch(packets_, true);
-            }
+            dp_packet_delete_batch(clone, true);
 
             ofpbuf_uninit(&actions);
             fat_rwlock_unlock(&dp->upcall_rwlock);
@@ -4561,8 +4557,9 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                packets_ = &recirc_pkts;
             }
 
-            for (i = 0; i < packets_->count; i++) {
-                packets_->packets[i]->md.recirc_id = nl_attr_get_u32(a);
+            struct dp_packet *packet;
+            DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
+                packet->md.recirc_id = nl_attr_get_u32(a);
             }
 
             (*depth)++;

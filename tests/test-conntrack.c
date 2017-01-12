@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Nicira, Inc.
+ * Copyright (c) 2015-2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ prepare_packets(size_t n, bool change, unsigned tid, ovs_be16 *dl_type)
     ovs_assert(n <= ARRAY_SIZE(pkt_batch->packets));
 
     dp_packet_batch_init(pkt_batch);
-    pkt_batch->count = n;
+    pkt_batch->burst = n;
 
     for (i = 0; i < n; i++) {
         struct udp_header *udp;
@@ -154,7 +154,6 @@ static void
 pcap_batch_execute_conntrack(struct conntrack *ct,
                              struct dp_packet_batch *pkt_batch)
 {
-    size_t i;
     struct dp_packet_batch new_batch;
     ovs_be16 dl_type = htons(0);
 
@@ -162,30 +161,25 @@ pcap_batch_execute_conntrack(struct conntrack *ct,
 
     /* pkt_batch contains packets with different 'dl_type'. We have to
      * call conntrack_execute() on packets with the same 'dl_type'. */
-
-    for (i = 0; i < pkt_batch->count; i++) {
-        struct dp_packet *pkt = pkt_batch->packets[i];
+    struct dp_packet *packet;
+    size_t i;
+    DP_PACKET_BATCH_FOR_EACH (i, packet, pkt_batch) {
         struct flow flow;
 
         /* This also initializes the l3 and l4 pointers. */
-        flow_extract(pkt, &flow);
-
-        if (!new_batch.count) {
-            dl_type = flow.dl_type;
-        }
+        flow_extract(packet, &flow);
 
         if (flow.dl_type != dl_type) {
-            conntrack_execute(ct, &new_batch, dl_type, true, 0, NULL, NULL,
-                              NULL);
+            if (!dp_packet_batch_is_empty(&new_batch)) {
+                conntrack_execute(ct, &new_batch, dl_type, true, 0,
+                                  NULL, NULL, NULL);
+            }
+
             dp_packet_batch_init(&new_batch);
+            dl_type = flow.dl_type;
         }
-        new_batch.packets[new_batch.count++] = pkt;
+        dp_packet_batch_expand(&new_batch, packet);
     }
-
-    if (new_batch.count) {
-        conntrack_execute(ct, &new_batch, dl_type, true, 0, NULL, NULL, NULL);
-    }
-
 }
 
 static void
@@ -226,14 +220,14 @@ test_pcap(struct ovs_cmdl_context *ctx)
             }
         }
 
-        pkt_batch.count = i;
-        if (pkt_batch.count == 0) {
+        pkt_batch.burst = i;
+        if (pkt_batch.burst == 0) {
             break;
         }
 
         pcap_batch_execute_conntrack(&ct, &pkt_batch);
 
-        for (i = 0; i < pkt_batch.count; i++) {
+        for (i = 0; i < pkt_batch.burst; i++) {
             struct ds ds = DS_EMPTY_INITIALIZER;
             struct dp_packet *pkt = pkt_batch.packets[i];
 

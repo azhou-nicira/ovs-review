@@ -1017,8 +1017,7 @@ netdev_dummy_rxq_recv(struct netdev_rxq *rxq_, struct dp_packet_batch *batch)
     netdev->stats.rx_bytes += dp_packet_size(packet);
     ovs_mutex_unlock(&netdev->mutex);
 
-    batch->packets[0] = packet;
-    batch->count = 1;
+    packet_batch_init_packet(batch, packet);
     return 0;
 }
 
@@ -1060,14 +1059,13 @@ netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
                   bool concurrent_txq OVS_UNUSED)
 {
     struct netdev_dummy *dev = netdev_dummy_cast(netdev);
+    struct dp_packet *packet;
     int error = 0;
     int i;
 
-    for (i = 0; i < batch->count; i++) {
-        const void *buffer = dp_packet_data(batch->packets[i]);
-        size_t size = dp_packet_size(batch->packets[i]);
-
-        size -= dp_packet_get_cutlen(batch->packets[i]);
+    DP_PACKET_BATCH_FOR_EACH(i, packet, batch) {
+        const void *buffer = dp_packet_data(packet);
+        size_t size = dp_packet_size(packet) - dp_packet_get_cutlen(packet);
 
         if (size < ETH_HEADER_LEN) {
             error = EMSGSIZE;
@@ -1083,6 +1081,7 @@ netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
             if (eth->eth_type == htons(ETH_TYPE_VLAN)) {
                 max_size += VLAN_HEADER_LEN;
             }
+
             if (size > max_size) {
                 error = EMSGSIZE;
                 break;
@@ -1113,10 +1112,10 @@ netdev_dummy_send(struct netdev *netdev, int qid OVS_UNUSED,
         }
 
         if (dev->tx_pcap) {
-            struct dp_packet packet;
+            struct dp_packet p;
 
-            dp_packet_use_const(&packet, buffer, size);
-            ovs_pcap_write(dev->tx_pcap, &packet);
+            dp_packet_use_const(&p, buffer, size);
+            ovs_pcap_write(dev->tx_pcap, &p);
             fflush(dev->tx_pcap);
         }
 

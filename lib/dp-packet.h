@@ -632,80 +632,192 @@ reset_dp_packet_checksum_ol_flags(struct dp_packet *p)
 enum { NETDEV_MAX_BURST = 32 }; /* Maximum number packets in a batch. */
 
 struct dp_packet_batch {
-    int count;
+    int burst;
     bool trunc; /* true if the batch needs truncate. */
+
+    /* Rewrite. */
+    int w_idx;  /* Write index. */
+    bool rewriting;  /* Flag. Internal use (for writting aserts). */
+
+    /* Packet pointers. */
     struct dp_packet *packets[NETDEV_MAX_BURST];
 };
 
-static inline void dp_packet_batch_init(struct dp_packet_batch *b)
+#define DP_PACKET_BATCH_FOR_EACH(IDX, PACKET, BATCH)   \
+    ovs_assert(!BATCH->rewriting);                     \
+    for (IDX = 0; IDX < BATCH->burst; IDX++)           \
+        if ( (PACKET = BATCH->packets[IDX]) != NULL)
+
+static inline void
+dp_packet_batch_init(struct dp_packet_batch *batch)
 {
-    b->count = 0;
-    b->trunc = false;
+    batch->burst = batch->w_idx = 0;
+    batch->trunc = false;
+    batch->rewriting = false;
+}
+
+static inline void
+packet_batch_init_packet(struct dp_packet_batch *batch, struct dp_packet *p)
+{
+    dp_packet_batch_init(batch);
+    batch->burst = 1;
+    batch->packets[0] = p;
+}
+
+static inline void
+dp_packet_batch_rewrite_open(struct dp_packet_batch *batch, bool *oneshot)
+{
+    if (oneshot) {
+        if ( *oneshot) {
+            return;
+        } else {
+            *oneshot = true;
+        }
+    }
+
+    ovs_assert(!batch->rewriting);
+
+    batch->w_idx = 0;
+    batch->rewriting = true;
+}
+
+static inline void
+dp_packet_batch_rewrite_close(struct dp_packet_batch *batch)
+{
+    ovs_assert(batch->rewriting);
+    batch->rewriting = false;
+    batch->burst = batch->w_idx;
+}
+
+static inline bool
+dp_packet_batch_rewrite(struct dp_packet_batch *batch,
+                        struct dp_packet *packet)
+{
+    ovs_assert(batch->rewriting);
+    if (batch->w_idx < NETDEV_MAX_BURST -1) {
+        batch->packets[batch->w_idx++] = packet;
+        return true;
+    }
+    return false;
 }
 
 static inline void
 dp_packet_batch_clone(struct dp_packet_batch *dst,
                       struct dp_packet_batch *src)
 {
+    struct dp_packet *packet;
     int i;
 
-    for (i = 0; i < src->count; i++) {
-        dst->packets[i] = dp_packet_clone(src->packets[i]);
+    ovs_assert(!src->rewriting);
+    DP_PACKET_BATCH_FOR_EACH (i, packet, src) {
+        dst->packets[dst->burst++] = dp_packet_clone(packet);
     }
-    dst->count = src->count;
     dst->trunc = src->trunc;
-}
-
-static inline void
-packet_batch_init_packet(struct dp_packet_batch *b, struct dp_packet *p)
-{
-    b->count = 1;
-    b->trunc = false;
-    b->packets[0] = p;
+    dst->rewriting = true;
 }
 
 static inline void
 dp_packet_delete_batch(struct dp_packet_batch *batch, bool may_steal)
 {
-    if (may_steal) {
+    if (may_steal && batch) {
+        struct dp_packet *packet;
         int i;
 
-        for (i = 0; i < batch->count; i++) {
-            dp_packet_delete(batch->packets[i]);
+        DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+            dp_packet_delete(packet);
         }
+
+        batch->burst = 0;
+        batch->trunc = false;
     }
 }
 
 static inline void
-dp_packet_batch_apply_cutlen(struct dp_packet_batch *pktb)
+dp_packet_batch_reset_cutlen(struct dp_packet_batch *batch)
 {
-    int i;
+    if (batch->trunc) {
+        struct dp_packet *packet;
+        int i;
 
-    if (!pktb->trunc)
-        return;
+        DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+            dp_packet_reset_cutlen(batch->packets[i]);
+        }
 
-    for (i = 0; i < pktb->count; i++) {
-        uint32_t cutlen = dp_packet_get_cutlen(pktb->packets[i]);
-
-        dp_packet_set_size(pktb->packets[i],
-                    dp_packet_size(pktb->packets[i]) - cutlen);
-        dp_packet_reset_cutlen(pktb->packets[i]);
+        batch->trunc = false;
     }
-    pktb->trunc = false;
 }
 
 static inline void
-dp_packet_batch_reset_cutlen(struct dp_packet_batch *pktb)
+dp_packet_batch_apply_cutlen(struct dp_packet_batch *batch)
 {
+    if (batch->trunc) {
+        struct dp_packet *packet;
+        int i;
+
+        DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+            uint32_t cutlen = dp_packet_get_cutlen(batch->packets[i]);
+            uint32_t newlen = dp_packet_size(packet) - cutlen;
+
+            dp_packet_set_size(packet, newlen);
+        }
+        dp_packet_batch_reset_cutlen(batch);
+    }
+}
+
+/* Steal a packet from the 'batch' at index 'idx'.
+ * The caller owns the packet.   */
+static inline struct dp_packet *
+dp_packet_batch_steal_packet(struct dp_packet_batch *batch, int idx)
+{
+    ovs_assert(idx < batch->burst);
+
+    struct dp_packet *packet = batch->packets[idx];
+    batch->packets[idx] = NULL;
+
+    return packet;
+}
+
+/* Drop and free a packet from 'batch' at index 'idx'. */
+static inline void
+dp_packet_batch_drop_packet(struct dp_packet_batch *batch, int idx)
+{
+    ovs_assert(idx < batch->burst);
+
+    dp_packet_delete(dp_packet_batch_steal_packet(batch, idx));
+}
+
+static inline struct dp_packet *
+dp_packet_batch_first_packet(struct dp_packet_batch *batch)
+{
+    struct dp_packet *packet;
     int i;
 
-    if (!pktb->trunc)
-        return;
-
-    pktb->trunc = false;
-    for (i = 0; i < pktb->count; i++) {
-        dp_packet_reset_cutlen(pktb->packets[i]);
+    DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+        return packet;
     }
+
+    return NULL;
+}
+
+static inline bool
+dp_packet_batch_is_empty(struct dp_packet_batch *batch)
+{
+    if (batch->burst) {
+        return dp_packet_batch_first_packet(batch);
+    }
+
+    return true;
+}
+
+static inline bool
+dp_packet_batch_expand(struct dp_packet_batch *batch, struct dp_packet *packet)
+{
+    if (batch->burst < NETDEV_MAX_BURST -1) {
+        batch->packets[batch->burst++] = packet;
+        return true;
+    }
+
+    return false;
 }
 
 #ifdef  __cplusplus
