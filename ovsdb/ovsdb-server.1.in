@@ -577,6 +577,35 @@ Initial views of rows are not presented in update2 notifications,
 but in the response object to the monitor_cond request. The formatting
 of the <table-updates2> object, however, is the same in either case.
 .
+.IP "4.1.15. Get Server ID"
+A new RPC method added in Open vSWitch version 2.7. The request contains
+the following members:
+.
+.PP
+.RS
+.nf
+"method": "get_server_id"
+"params": null
+"id": <nonnull-json-value>
+.fi
+.RE
+.
+.IP
+The response object contains the following members:
+.
+.PP
+.RS
+.nf
+"result": "<server_id>"
+"error": null
+"id": same "id" as request
+.fi
+.RE
+.
+.IP
+<server_id> is JSON string that contains a UUID that uniquely identifies
+the OVSDB server instance.
+.
 .IP "5.1. Notation"
 For <condition>, RFC 7047 only allows the use of \fB!=\fR, \fB==\fR,
 \fBincludes\fR, and \fBexcludes\fR operators with set types.  Open
