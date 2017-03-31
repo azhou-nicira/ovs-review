@@ -662,6 +662,7 @@ close_dpif_backer(struct dpif_backer *backer)
     free(backer->type);
     free(backer->dp_version_string);
     dpif_close(backer->dpif);
+    id_pool_destroy(backer->meter_ids);
     free(backer);
 }
 
@@ -786,6 +787,15 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
     backer->support.variable_length_userdata
         = check_variable_length_userdata(backer);
     backer->dp_version_string = dpif_get_dp_version(backer->dpif);
+
+    /* Manage Datpath meter IDs if supported. */
+    struct ofputil_meter_features features;
+    dpif_meter_get_features(backer->dpif, &features);
+    if (features.max_meters) {
+        backer->meter_ids = id_pool_create(0, features.max_meters);
+    } else {
+        backer->meter_ids = NULL;
+    }
 
     return error;
 }
@@ -5385,6 +5395,17 @@ meter_set(struct ofproto *ofproto_, ofproto_meter_id *meter_id,
 {
     struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
 
+    /* Provider ID unknown. Use backer to allocate a new DP meter */
+    if (meter_id->uint32 == UINT32_MAX) {
+        if (!ofproto->backer->meter_ids) {
+            return EFBIG; /* Datapath does not support meter.  */
+        }
+
+        if(!id_pool_alloc_id(ofproto->backer->meter_ids, &meter_id->uint32)) {
+            return ENOMEM; /* Can't allocate a DP meter. */
+        }
+    }
+
     switch (dpif_meter_set(ofproto->backer->dpif, meter_id, config)) {
     case 0:
         return 0;
@@ -5414,12 +5435,31 @@ meter_get(const struct ofproto *ofproto_, ofproto_meter_id meter_id,
     return OFPERR_OFPMMFC_UNKNOWN_METER;
 }
 
+struct free_meter_id_args {
+    struct ofproto_dpif *ofproto;
+    ofproto_meter_id meter_id;
+};
+
+static void
+free_meter_id(struct free_meter_id_args *args)
+{
+    struct ofproto_dpif *ofproto = args->ofproto;
+
+    dpif_meter_del(ofproto->backer->dpif, args->meter_id, NULL, 0);
+    id_pool_free_id(ofproto->backer->meter_ids, args->meter_id.uint32);
+    free(args);
+}
+
 static void
 meter_del(struct ofproto *ofproto_, ofproto_meter_id meter_id)
 {
-    struct ofproto_dpif *ofproto = ofproto_dpif_cast(ofproto_);
+    struct free_meter_id_args *arg = xmalloc(sizeof *arg);
 
-    dpif_meter_del(ofproto->backer->dpif, meter_id, NULL, 0);
+    /* The 'meter_id' may still be in use the xlate code.
+     * Only safe to delet after RCU grace period. */
+    arg->ofproto = ofproto_dpif_cast(ofproto_);
+    arg->meter_id = meter_id;
+    ovsrcu_postpone(free_meter_id, arg);
 }
 
 const struct ofproto_class ofproto_dpif_class = {
