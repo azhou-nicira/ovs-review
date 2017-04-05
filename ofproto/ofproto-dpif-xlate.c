@@ -2861,6 +2861,15 @@ compose_sample_action(struct xlate_ctx *ctx,
                                              OVS_SAMPLE_ATTR_ACTIONS);
     }
 
+    /* If the slow path meter is configured by the controller,
+     * Insert a meter action before the user space action.   */
+    struct ofproto *ofproto = &ctx->xin->ofproto->up;
+    uint32_t meter_id = ofproto->slowpath_meter_id;
+
+    if (meter_id != UINT32_MAX) {
+        nl_msg_put_u32(ctx->odp_actions, OVS_ACTION_ATTR_METER, meter_id);
+    }
+
     odp_port_t odp_port = ofp_port_to_odp_port(
         ctx->xbridge, ctx->xin->flow.in_port.ofp_port);
     uint32_t pid = dpif_port_get_pid(ctx->xbridge->dpif, odp_port,
