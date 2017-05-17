@@ -57,14 +57,13 @@ AT_CHECK([ovs-vsctl set-controller br1 unix:controller])
 
 dnl Wait for the controller connection to come up
 OVS_WAIT_UNTIL(
-    [ovs-vsctl --column=is_connected list controller |grep -c "true"], [0], [
-2])
+    [ovs-vsctl --column=is_connected,status list controller |tee output dnl
+       |grep -c "true"], [0], [2
+])
 
 dnl Make sure the connection status have two records and they are different.
 dnl (The exact output contains timing information that are machine dependent.)
-AT_CHECK([ovs-vsctl --columns=status list controller |dnl
-          sort -u |grep -c "ACTIVE"], [0], [dnl
-2
+AT_CHECK([grep ^status output | sort -u |grep -c "ACTIVE"], [0], [2
 ])
 
 OVS_APP_EXIT_AND_WAIT([ovs-vswitchd])
