@@ -4981,35 +4981,56 @@ xlate_sample_action(struct xlate_ctx *ctx,
                           tunnel_out_port, false);
 }
 
-/* Use datapath 'clone' or sample to enclose the translation of 'oc'.   */
+/* For datapath that does not support clone, nor have a suitable
+ * sample action that can be used for clone. The xlate logic generates
+ * actions that restore the packets post clone.
+ *
+ * The draw back is not all packet changes inside a clone can be restored.
+ * For example, NAT'd packet can not be restored easily. Metered packet
+ * that dropped inside a clone can not be restored.
+ *
+ * This method is only used as the last resort for supporting older
+ * datapaths, and is used mainly for backward compatibility.   */
+
+/* For datapth that supports the 'clone' action.  Only OVS
+ * userspace datapath implements this action.  */
+
+/* For datapath that does not support 'clone' action, but have a suitable
+ * sample action implementation for clone. The upstream Linux kernel
+ * version 4.11 or greater, and kernel module from OVS version 2.8 or
+ * greater version have suitable sample action implementations.  */
+
+/* 'odp_actions will be installed into ctx->odp_actions, The caller
+ * needs to release the memory that was provided by ctx->odp_actions */
 static void
-compose_clone_action(struct xlate_ctx *ctx, const struct ofpact_nest *oc)
+compose_clone(struct xlate_ctx *ctx, struct flow *old_base_flow,
+              struct ofpbuf *clone_odp)
 {
-    size_t clone_offset = nl_msg_start_nested(ctx->odp_actions,
-                                              OVS_ACTION_ATTR_CLONE);
-    do_xlate_actions(oc->actions, ofpact_nest_get_action_len(oc), ctx);
-    nl_msg_end_non_empty_nested(ctx->odp_actions, clone_offset);
-}
+    size_t offset, ac_offset;
 
-/* Use datapath 'sample' action to translate clone.  */
-static void
-compose_clone_action_using_sample(struct xlate_ctx *ctx,
-                                  const struct ofpact_nest *oc)
-{
-    size_t offset = nl_msg_start_nested(ctx->odp_actions,
-                                        OVS_ACTION_ATTR_SAMPLE);
+    if (ctx->xbridge->support.clone) { /* Use Clone */
+        offset = nl_msg_start_nested(ctx->odp_actions, OVS_ACTION_ATTR_CLONE);
+        ofpbuf_push(ctx->odp_actions, clone_odp->data, clone_odp->size);
+        nl_msg_end_non_empty_nested(ctx->odp_actions, offset);
+        ctx->base_flow = *old_base_flow;
+    } else if (ctx->xbridge->support.sample_nesting > 3) { /* Use Sample */
+        offset = nl_msg_start_nested(ctx->odp_actions,
+                                     OVS_SAMPLE_ATTR_ACTIONS);
 
-    size_t ac_offset = nl_msg_start_nested(ctx->odp_actions,
-                                           OVS_SAMPLE_ATTR_ACTIONS);
+        ac_offset = nl_msg_start_nested(ctx->odp_actions,
+                                        OVS_SAMPLE_ATTR_ACTIONS);
+        ofpbuf_push(ctx->odp_actions, clone_odp->data, clone_odp->size);
 
-    do_xlate_actions(oc->actions, ofpact_nest_get_action_len(oc), ctx);
-
-    if (nl_msg_end_non_empty_nested(ctx->odp_actions, ac_offset)) {
-        nl_msg_cancel_nested(ctx->odp_actions, offset);
-    } else {
-        nl_msg_put_u32(ctx->odp_actions, OVS_SAMPLE_ATTR_PROBABILITY,
-                       UINT32_MAX); /* 100% probability. */
-        nl_msg_end_nested(ctx->odp_actions, offset);
+        if (nl_msg_end_non_empty_nested(ctx->odp_actions, ac_offset)) {
+            nl_msg_cancel_nested(ctx->odp_actions, offset);
+        } else {
+            nl_msg_put_u32(ctx->odp_actions, OVS_SAMPLE_ATTR_PROBABILITY,
+                           UINT32_MAX); /* 100% probability. */
+            nl_msg_end_nested(ctx->odp_actions, offset);
+        }
+        ctx->base_flow = *old_base_flow;
+    } else {  /* Use actions. */
+        ofpbuf_push(ctx->odp_actions, clone_odp->data, clone_odp->size);
     }
 }
 
@@ -5030,27 +5051,24 @@ xlate_clone(struct xlate_ctx *ctx, const struct ofpact_nest *oc)
     ofpbuf_use_stub(&ctx->action_set, actset_stub, sizeof actset_stub);
     ofpbuf_put(&ctx->action_set, old_action_set.data, old_action_set.size);
 
-    /* Datapath clone action will make sure the pre clone packets
-     * are used for actions after clone. Save and restore
-     * ctx->base_flow to reflect this for the openflow pipeline. */
-    if (ctx->xbridge->support.clone) {
-        struct flow old_base_flow = ctx->base_flow;
-        compose_clone_action(ctx, oc);
-        ctx->base_flow = old_base_flow;
-    } else if (ctx->xbridge->support.sample_nesting > 3) {
-        /* Avoid generate sample action if datapath
-         * only allow small number of nesting. Deeper nesting
-         * can cause the datapath to reject the generated flow.  */
-        struct flow old_base_flow = ctx->base_flow;
-        compose_clone_action_using_sample(ctx, oc);
-        ctx->base_flow = old_base_flow;
-    } else {
-        do_xlate_actions(oc->actions, ofpact_nest_get_action_len(oc), ctx);
-    }
+    /* Save current 'odp_actions'.  Use an empety 'odp_actions' buffer
+     * to translate the actions within clone */
+    struct ofpbuf *old_odp_actions = ctx->odp_actions;
+    uint64_t clone_odp_stub[1024 / 8];
+    struct ofpbuf clone_odp = OFPBUF_STUB_INITIALIZER(clone_odp_stub);
+    ctx->odp_actions = &clone_odp;
+    do_xlate_actions(oc->actions, ofpact_nest_get_action_len(oc), ctx);
+
+    /* Restore the original 'odp_actions', add the clone translation with
+     * the proper datapath clone action (or not using datapath clone
+     * action at all). */
+    ctx->odp_actions = old_odp_actions;
+    struct flow old_base = ctx->base_flow;
+    compose_clone(ctx, &old_base, &clone_odp);
+    ofpbuf_uninit(&clone_odp);
 
     ofpbuf_uninit(&ctx->action_set);
     ctx->action_set = old_action_set;
-
     ofpbuf_uninit(&ctx->stack);
     ctx->stack = old_stack;
 
