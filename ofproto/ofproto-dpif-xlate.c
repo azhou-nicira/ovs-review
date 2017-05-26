@@ -577,6 +577,10 @@ static void xlate_xbundle_copy(struct xbridge *, struct xbundle *);
 static void xlate_xport_copy(struct xbridge *, struct xbundle *,
                              struct xport *);
 static void xlate_xcfg_free(struct xlate_cfg *);
+
+struct compose_clone_info;
+static struct compose_clone_info *compose_clone_open(struct xlate_ctx *);
+static void compose_clone_close(struct xlate_ctx *, struct compose_clone_info *);
 
 /* Tracing helpers. */
 
@@ -3395,9 +3399,15 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
             = ofproto_dpif_get_tables_version(ctx->xbridge->ofproto);
 
         if (!process_special(ctx, peer) && may_receive(peer, ctx)) {
-            if (xport_stp_forward_state(peer) && xport_rstp_forward_state(peer)) {
+            if (xport_stp_forward_state(peer)
+                && xport_rstp_forward_state(peer)) {
+                struct compose_clone_info *info;
+
+                info = compose_clone_open(ctx);
                 xlate_table_action(ctx, flow->in_port.ofp_port, 0, true, true,
                                    false);
+                compose_clone_close(ctx, info);
+
                 if (!ctx->freezing) {
                     xlate_action_set(ctx);
                 }
