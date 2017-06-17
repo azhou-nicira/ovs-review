@@ -233,6 +233,8 @@ struct dpif_backer {
 
     /* Datapath feature support. */
     struct dpif_backer_support support;
+    struct dpif_backer_support boottime_support;
+
     struct atomic_count tnl_count;
 };
 

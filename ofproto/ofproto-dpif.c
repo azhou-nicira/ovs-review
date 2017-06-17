@@ -799,6 +799,12 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
         backer->meter_ids = NULL;
     }
 
+    /* Make a pristine snapshot of 'support' into 'boottime_support'.
+     * 'boottime_support' can be checked to prevent 'support' to be changed
+     * beyond the datapath capabilities. In case 'support' is changed by
+     * the user, 'boottime_support' can be used to restore it.  */
+    backer->boottime_support = backer->support;
+
     return error;
 }
 
