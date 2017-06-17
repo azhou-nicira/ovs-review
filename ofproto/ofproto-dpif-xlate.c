@@ -384,6 +384,13 @@ struct xlate_ctx {
     struct ofpbuf action_set;   /* Action set. */
 
     enum xlate_error error;     /* Translation failed. */
+
+    /* True if the actions in the action list can be reversed with another
+     * action. Since datapath clone operation is expensive, the clone translation
+     * can be cheaper if the actions within the clone is reversible with other
+     * actions, and thus avoid using datapath clone.
+     */
+    bool reversible;
 };
 
 /* Structure to track VLAN manipulation */
@@ -5002,13 +5009,15 @@ xlate_sample_action(struct xlate_ctx *ctx,
 
 /* 'odp_actions will be installed into ctx->odp_actions, The caller
  * needs to release the memory that was provided by ctx->odp_actions */
-static void
+static int
 compose_clone(struct xlate_ctx *ctx, struct flow *old_base_flow,
               struct ofpbuf *clone_odp)
 {
     size_t offset, ac_offset;
 
-    if (ctx->xbridge->support.clone) { /* Use Clone */
+    if (ctx->reversible) { /* Use actions */
+        ofpbuf_push(ctx->odp_actions, clone_odp->data, clone_odp->size);
+    } else if (ctx->xbridge->support.clone) { /* Use Clone */
         offset = nl_msg_start_nested(ctx->odp_actions, OVS_ACTION_ATTR_CLONE);
         ofpbuf_push(ctx->odp_actions, clone_odp->data, clone_odp->size);
         nl_msg_end_non_empty_nested(ctx->odp_actions, offset);
@@ -5029,8 +5038,11 @@ compose_clone(struct xlate_ctx *ctx, struct flow *old_base_flow,
             nl_msg_end_nested(ctx->odp_actions, offset);
         }
         ctx->base_flow = *old_base_flow;
-    } else {  /* Use actions. */
-        ofpbuf_push(ctx->odp_actions, clone_odp->data, clone_odp->size);
+    } else {
+        xlate_report_error(ctx, "ignoring clone action because "
+                           "datapath lacks support (needs Linux 3.10+ or "
+                           "kernel module from OVS 1.11+)");
+        /* XXX  Failed; */
     }
 }
 
@@ -5039,6 +5051,7 @@ xlate_clone(struct xlate_ctx *ctx, const struct ofpact_nest *oc)
 {
     bool old_was_mpls = ctx->was_mpls;
     bool old_conntracked = ctx->conntracked;
+    bool old_reversible = ctx->reversible;
     struct flow old_flow = ctx->xin->flow;
 
     struct ofpbuf old_stack = ctx->stack;
@@ -5057,6 +5070,7 @@ xlate_clone(struct xlate_ctx *ctx, const struct ofpact_nest *oc)
     uint64_t clone_odp_stub[1024 / 8];
     struct ofpbuf clone_odp = OFPBUF_STUB_INITIALIZER(clone_odp_stub);
     ctx->odp_actions = &clone_odp;
+    ctx->reversible = true;
     do_xlate_actions(oc->actions, ofpact_nest_get_action_len(oc), ctx);
 
     /* Restore the original 'odp_actions', add the clone translation with
@@ -5081,6 +5095,9 @@ xlate_clone(struct xlate_ctx *ctx, const struct ofpact_nest *oc)
     /* Popping MPLS from the clone should have no effect on the original
      * packet. */
     ctx->was_mpls = old_was_mpls;
+
+    /* Actions enclosed in clone is always reversible outside of clone */
+    ctx->reversible = old_reversible;
 }
 
 static void
@@ -5089,6 +5106,7 @@ xlate_meter_action(struct xlate_ctx *ctx, const struct ofpact_meter *meter)
     if (meter->provider_meter_id != UINT32_MAX) {
         nl_msg_put_u32(ctx->odp_actions, OVS_ACTION_ATTR_METER,
                        meter->provider_meter_id);
+        ctx->reversible = false;
     }
 }
 
@@ -5442,6 +5460,7 @@ compose_conntrack_action(struct xlate_ctx *ctx, struct ofpact_conntrack *ofc)
         ctx->conntracked = true;
         compose_recirculate_and_fork(ctx, ofc->recirc_table);
     }
+    ctx->reversible = false;
 }
 
 static void
@@ -6281,6 +6300,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
 
         .action_set_has_group = false,
         .action_set = OFPBUF_STUB_INITIALIZER(action_set_stub),
+        .reversible = true,
     };
 
     /* 'base_flow' reflects the packet as it came in, but we need it to reflect
